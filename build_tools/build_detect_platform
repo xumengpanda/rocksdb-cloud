@@ -169,8 +169,8 @@ case "$TARGET_OS" in
         ;;
     OS_ANDROID_CROSSCOMPILE)
         PLATFORM=OS_ANDROID
-	COMMON_FLAGS="$COMMON_FLAGS -fno-builtin-memcmp -D_REENTRANT -DOS_ANDROID -DROCKSDB_PLATFORM_POSIX"
-	PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS "  # All pthread features are in the Android C library
+        COMMON_FLAGS="$COMMON_FLAGS -fno-builtin-memcmp -D_REENTRANT -DOS_ANDROID -DROCKSDB_PLATFORM_POSIX"
+        PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS "  # All pthread features are in the Android C library
         # PORT_FILES=port/android/android.cc
         CROSS_COMPILE=true
         ;;
@@ -424,6 +424,15 @@ if [ "${USE_AWS}XXX" = "1XXX" ]; then
   S3_LDFLAGS="$S3_LDFLAGS -laws-cpp-sdk-s3 -laws-cpp-sdk-kinesis -laws-cpp-sdk-core"
   COMMON_FLAGS="$COMMON_FLAGS $S3_CCFLAGS"
   PLATFORM_LDFLAGS="$S3_LDFLAGS $PLATFORM_LDFLAGS"
+fi
+
+if [ "${USE_AZURE}XXX" = "1XXX" ]; then
+  AZURE_SDK=/usr/local
+  AZI=${AWS_SDK}/include/
+  AZURE_CCFLAGS="$AZURE_CCFLAGS -I$AZI -DUSE_AZURE"
+  AZURE_LDFLAGS="$AZURE_LDFLAGS -lssl -lcrypto -lcpprest -lazurestorage -lboost_system -lboost_thread -lboost_chrono"
+  COMMON_FLAGS="$COMMON_FLAGS $AZURE_CCFLAGS"
+  PLATFORM_LDFLAGS="$AZURE_LDFLAGS $PLATFORM_LDFLAGS"
 fi
 
 if [ "$TARGET_OS" = FreeBSD -a "$TARGET_ARCHITECTURE" = i386 ]; then
