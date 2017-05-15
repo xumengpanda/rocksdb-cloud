@@ -2,6 +2,8 @@
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
+//  This source code is also licensed under the GPLv2 license found in the
+//  COPYING file in the root directory of this source tree.
 //
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
@@ -177,6 +179,7 @@ DEFINE_string(
     "Meta operations:\n"
     "\tcompact     -- Compact the entire DB\n"
     "\tstats       -- Print DB stats\n"
+    "\tresetstats  -- Reset DB stats\n"
     "\tlevelstats  -- Print the number of files and bytes per level\n"
     "\tsstables    -- Print sstable info\n"
     "\theapprofile -- Dump a heap profile (if supported by this"
@@ -618,6 +621,8 @@ DEFINE_string(
 
 DEFINE_uint64(fifo_compaction_max_table_files_size_mb, 0,
               "The limit of total table file sizes to trigger FIFO compaction");
+DEFINE_bool(fifo_compaction_allow_compaction, true,
+            "Allow compaction in FIFO compaction.");
 #endif  // ROCKSDB_LITE
 
 DEFINE_bool(report_bg_io_stats, false,
@@ -709,6 +714,8 @@ DEFINE_string(env_uri, "", "URI for registry Env lookup. Mutually exclusive"
 DEFINE_string(aws_access_id, "", "Access id for AWS");
 DEFINE_string(aws_secret_key, "", "Secret key for AWS");
 DEFINE_string(aws_region, "", "AWS region");
+DEFINE_bool(keep_local_sst_files , true ,
+            "Keep all files in local storage as well as cloud storage");
 #endif  // ROCKSDB_LITE
 DEFINE_string(hdfs, "", "Name of hdfs environment. Mutually exclusive with"
               " --env_uri.");
@@ -906,17 +913,28 @@ rocksdb::Env* CreateAwsEnv(const std::string& dbpath,
                             std::unique_ptr<rocksdb::Env>* result) {
   std::shared_ptr<rocksdb::Logger> info_log;
   info_log.reset(new rocksdb::StderrLogger(
-		     rocksdb::InfoLogLevel::DEBUG_LEVEL));
+		     rocksdb::InfoLogLevel::WARN_LEVEL));
   rocksdb::CloudEnvOptions coptions;
-  coptions.credentials.access_key_id = FLAGS_aws_access_id;
-  coptions.credentials.secret_key = FLAGS_aws_secret_key;
-  coptions.region = FLAGS_aws_region;
+  std::string region;
+  if (FLAGS_aws_access_id.size() == 0) {
+      rocksdb::Status st = rocksdb::AwsEnv::GetTestCredentials(&coptions.credentials.access_key_id,
+                                                      &coptions.credentials.secret_key,
+                                                      &region);
+      assert(st.ok());
+  } else {
+    coptions.credentials.access_key_id = FLAGS_aws_access_id;
+    coptions.credentials.secret_key = FLAGS_aws_secret_key;
+    region = FLAGS_aws_region;
+  }
+  coptions.keep_local_sst_files = FLAGS_keep_local_sst_files;
   rocksdb::CloudEnv* s;
   rocksdb::Status st = rocksdb::AwsEnv::NewAwsEnv(rocksdb::Env::Default(),
 		         "dbbench." + rocksdb::AwsEnv::GetTestBucketSuffix(),
 			 "", // src object prefix
+                         region, // src region
 		         "dbbench." + rocksdb::AwsEnv::GetTestBucketSuffix(),
 			 "", // destination object prefix
+                         region, // dest region
 		         coptions,
 			 std::move(info_log),
 			 &s);
@@ -2473,6 +2491,8 @@ void VerifyDBFromDB(std::string& truth_db_name) {
         method = &Benchmark::TimeSeries;
       } else if (name == "stats") {
         PrintStats("rocksdb.stats");
+      } else if (name == "resetstats") {
+        ResetStats();
       } else if (name == "verify") {
         VerifyDBFromDB(FLAGS_truth_db);
       } else if (name == "levelstats") {
@@ -2861,7 +2881,8 @@ void VerifyDBFromDB(std::string& truth_db_name) {
         FLAGS_use_direct_io_for_flush_and_compaction;
 #ifndef ROCKSDB_LITE
     options.compaction_options_fifo = CompactionOptionsFIFO(
-       FLAGS_fifo_compaction_max_table_files_size_mb * 1024 * 1024);
+        FLAGS_fifo_compaction_max_table_files_size_mb * 1024 * 1024,
+        FLAGS_fifo_compaction_allow_compaction);
 #endif  // ROCKSDB_LITE
     if (FLAGS_prefix_size != 0) {
       options.prefix_extractor.reset(
@@ -5055,6 +5076,15 @@ void VerifyDBFromDB(std::string& truth_db_name) {
     db->CompactRange(CompactRangeOptions(), nullptr, nullptr);
   }
 
+  void ResetStats() {
+    if (db_.db != nullptr) {
+      db_.db->ResetStats();
+    }
+    for (const auto& db_with_cfh : multi_dbs_) {
+      db_with_cfh.db->ResetStats();
+    }
+  }
+
   void PrintStats(const char* key) {
     if (db_.db != nullptr) {
       PrintStats(db_.db, key, false);
@@ -5129,12 +5159,6 @@ int db_bench_tool(int argc, char** argv) {
     fprintf(stderr, "Cannot provide both --hdfs and --env_uri.\n");
     exit(1);
   } else if (!FLAGS_env_uri.empty()) {
-    if (FLAGS_env_uri.substr(0,5).compare("s3://") == 0) {
-      if (FLAGS_aws_access_id.size() == 0 || FLAGS_aws_secret_key.size() == 0) {
-        fprintf(stderr, "AWS S3 needs --aws_access_id and --aws_secret_key\n");
-        exit(1);
-      }
-    }
     FLAGS_env = NewCustomObject<Env>(FLAGS_env_uri, &custom_env_guard);
     if (FLAGS_env == nullptr) {
       fprintf(stderr, "No Env registered for URI: %s\n", FLAGS_env_uri.c_str());
