@@ -35,5 +35,11 @@ make check J=1
 To run dbbench,
    db_bench --env_uri="s3://" --aws_access_id=xxx and --aws_secret_key=yyy
 
+## RocksDB-Cloud on Azure
+
+Extra build flags
+
+export EXTRA_CXXFLAGS="-I /usr/local/Cellar/openssl/1.0.2j/include"
+export EXTRA_LDFLAGS="-L/usr/local/Cellar/openssl/1.0.2j/lib -lboost_system -lssl -lcrypto -lcpprest -lazurestorage -lboost_system -lboost_thread -lboost_chrono"
 
 

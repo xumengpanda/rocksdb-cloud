@@ -51,8 +51,10 @@ class AzureEnv : public CloudEnvImpl {
   // A factory method for creating S3 envs
   static Status NewAzureEnv(Env *env, const std::string &src_cloud_storage,
                             const std::string &src_cloud_object_prefix,
+                            const std::string &src_bucket_connect_string,
                             const std::string &dest_cloud_storage,
                             const std::string &dest_cloud_object_prefix,
+                            const std::string &dest_bucket_connect_string,
                             const CloudEnvOptions &env_options,
                             std::shared_ptr<Logger> info_log, CloudEnv **cenv);
 
@@ -230,8 +232,10 @@ class AzureEnv : public CloudEnvImpl {
   //
   explicit AzureEnv(Env *underlying_env, const std::string &src_bucket_prefix,
                     const std::string &src_object_prefix,
+                    const std::string &src_bucket_connect_string,
                     const std::string &dest_bucket_prefix,
                     const std::string &dest_object_prefix,
+                    const std::string &dest_bucket_connect_string,
                     const CloudEnvOptions &cloud_options,
                     std::shared_ptr<Logger> info_log = nullptr);
 
@@ -245,11 +249,11 @@ class AzureEnv : public CloudEnvImpl {
 
   Status create_bucket_status_;
 
+  azure::storage::cloud_blob_container src_container_;
+  azure::storage::cloud_blob_container dest_container_;
   // Background thread to tail stream
   std::thread tid_;
   std::atomic<bool> running_;
-
-  std::unique_ptr<void *> tailer_;
 
   // Is there a src bucket specified?
   bool has_src_bucket_;

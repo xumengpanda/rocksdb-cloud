@@ -19,8 +19,10 @@ namespace rocksdb {
 
 AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
                    const std::string& src_object_prefix,
+                   const std::string& src_bucket_connect_string,
                    const std::string& dest_bucket_prefix,
                    const std::string& dest_object_prefix,
+                   const std::string& dest_bucket_connect_string,
                    const CloudEnvOptions& _cloud_env_options,
                    std::shared_ptr<Logger> info_log)
     : CloudEnvImpl(CloudType::kAzure, underlying_env),
@@ -40,6 +42,54 @@ AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
   dest_object_prefix_ = trim(dest_object_prefix_);
 
   base_env_ = underlying_env;
+
+  if (!GetSrcBucketPrefix().empty()) {
+    has_src_bucket_ = true;
+  }
+  if (!GetDestBucketPrefix().empty()) {
+    has_dest_bucket_ = true;
+  }
+
+  // Do we have two unique buckets?
+  if (has_src_bucket_ && has_dest_bucket_ &&
+      ((GetSrcBucketPrefix() != GetDestBucketPrefix()) ||
+       (GetSrcObjectPrefix() != GetDestObjectPrefix()))) {
+    has_two_unique_buckets_ = true;
+  }
+
+  if (has_two_unique_buckets_) {
+    if (src_bucket_region_ == dest_bucket_region_) {
+      // alls good
+    } else {
+      create_bucket_status_ =
+          Status::InvalidArgument("Two different regions not supported");
+      Log(InfoLogLevel::ERROR_LEVEL, info_log,
+          "[aws] NewAzureEnv Buckets %s, %s in two different regions %, %s "
+          "is not supported",
+          src_bucket_prefix_.c_str(), dest_bucket_prefix_.c_str(),
+          src_bucket_region_.c_str(), dest_bucket_region_.c_str());
+      return;
+    }
+  }
+
+  try {
+    cloud_storage_account storage_account = cloud_storage_account::parse(
+        xdb_to_utf16string(src_bucket_connect_string));
+    auto blob_client = storage_account.create_cloud_blob_client();
+    src_container_ = blob_client.get_container_reference(
+        xdb_to_utf16string(src_bucket_prefix));
+    src_container_.create_if_not_exists();
+    storage_account = cloud_storage_account::parse(
+        xdb_to_utf16string(dest_bucket_connect_string));
+    blob_client = storage_account.create_cloud_blob_client();
+    dest_container_ = blob_client.get_container_reference(
+        xdb_to_utf16string(src_bucket_prefix));
+    dest_container_.create_if_not_exists();
+
+  } catch (const azure::storage::storage_exception& e) {
+    Log(InfoLogLevel::ERROR_LEVEL, info_log,
+        "[azure] NewAzureEnv Unable to create environment %s", e.what());
+  }
 }
 
 AzureEnv::~AzureEnv() {
@@ -50,7 +100,8 @@ AzureEnv::~AzureEnv() {
   }
 }
 
-Status AzureEnv::NewLogger(const std::string& fname, shared_ptr<Logger>* result) {
+Status AzureEnv::NewLogger(const std::string& fname,
+                           shared_ptr<Logger>* result) {
   return base_env_->NewLogger(fname, result);
 }
 
