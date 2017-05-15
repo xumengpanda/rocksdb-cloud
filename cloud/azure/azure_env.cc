@@ -15,7 +15,285 @@
 
 #include "cloud/db_cloud_impl.h"
 
+using namespace azure::storage;
+
 namespace rocksdb {
+
+const std::string pathsep = "/";
+
+// types of rocksdb files
+const std::string sst = ".sst";
+const std::string ldb = ".ldb";
+const std::string log = ".log";
+
+#if defined(OS_WIN)
+const wchar_t* xdb_size = L"__xdb__size";
+
+static inline std::string&& xdb_to_utf8string(std::string&& value) {
+  return std::move(value);
+}
+
+static inline const std::string& xdb_to_utf8string(const std::string& value) {
+  return value;
+}
+
+static inline std::string xdb_to_utf8string(const utf16string& value) {
+  return utility::conversions::to_utf8string(value);
+}
+
+static inline utf16string xdb_to_utf16string(const std::string& value) {
+  return utility::conversions::to_utf16string(value);
+}
+
+static inline const utf16string& xdb_to_utf16string(const utf16string& value) {
+  return value;
+}
+
+static inline utf16string&& xdb_to_utf16string(utf16string&& value) {
+  return std::move(value);
+}
+
+static inline utf16string xdb_utf8_to_utf16(const std::string& s) {
+  return utility::conversions::utf8_to_utf16(s);
+}
+
+#else
+const char* xdb_size = "__xdb__size";
+
+#define xdb_to_utf8string(x) (x)
+
+#define xdb_to_utf16string(x) (x)
+
+#define xdb_utf8_to_utf16(x) (x)
+
+#endif
+
+static size_t XdbGetUniqueId(const cloud_page_blob& page_blob, char* id,
+                             size_t max_size) {
+  const std::string path = xdb_to_utf8string(page_blob.uri().path());
+  size_t len = path.size() > max_size ? max_size : path.size();
+  memcpy(id, path.c_str(), len);
+  return len;
+}
+
+class AzureReadableFile : virtual public SequentialFile,
+                          virtual public RandomAccessFile {
+ public:
+  AzureReadableFile(cloud_page_blob& page_blob)
+      : _page_blob(page_blob), _offset(0) {
+    try {
+      _page_blob.download_attributes();
+      std::string size = xdb_to_utf8string(_page_blob.metadata()[xdb_size]);
+      _size = size.empty() ? -1 : std::stoll(size);
+    } catch (const azure::storage::storage_exception& e) {
+      _size = -1;
+    }
+  }
+
+  ~AzureReadableFile() {}
+
+  virtual Status Read(size_t n, Slice* result, char* scratch) {
+    return ReadContents(&_offset, n, result, scratch);
+  }
+
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const {
+    return ReadContents(&offset, n, result, scratch);
+  }
+
+  Status Skip(uint64_t n) {
+    _offset += n;
+    return Status::OK();
+  }
+
+  virtual size_t GetUniqueId(char* id, size_t max_size) const {
+    return XdbGetUniqueId(_page_blob, id, max_size);
+  }
+
+  const char* Name() { return xdb_to_utf8string(_page_blob.name()).c_str(); }
+
+ private:
+  Status ReadContents(uint64_t* origin, size_t n, Slice* result,
+                      char* scratch) const {
+    try {
+      uint64_t offset = *origin;
+      uint64_t page_offset = (offset >> 9) << 9;
+      uint64_t sz = _size - offset;
+      if (sz > n) sz = n;
+      if (sz <= 0) {
+        *result = Slice(scratch, 0);
+        return Status::OK();
+      }
+      size_t cursor = offset - page_offset;
+      assert(cursor <= 512);
+      size_t nz = ((sz >> 9) + 1 + ((cursor > 0) ? 1 : 0)) << 9;
+      std::vector<page_range> pages =
+          _page_blob.download_page_ranges(page_offset, nz);
+      char* target = scratch;
+      size_t remain = sz;
+      size_t r = 0;
+      for (std::vector<page_range>::iterator it = pages.begin();
+           it < pages.end(); it++) {
+        concurrency::streams::istream blobstream =
+            (const_cast<cloud_page_blob&>(_page_blob)).open_read();
+        blobstream.seek(it->start_offset(), std::ios_base::beg);
+        concurrency::streams::stringstreambuf buffer;
+        blobstream.read(buffer, it->end_offset() - it->start_offset()).wait();
+        const char* src = buffer.collection().c_str();
+        size_t bsize = buffer.size();
+        size_t len = remain < bsize ? remain : bsize - cursor;
+        assert(cursor + len <= bsize);
+        memcpy(target, src + cursor, len);
+        cursor = 0;
+        remain -= len;
+        target += len;
+        r += len;
+        if (remain <= 0) break;
+      }
+      *result = Slice(scratch, r);
+      *origin = offset + r;
+      return Status::OK();
+    } catch (const azure::storage::storage_exception& e) {
+    }
+    return Status::IOError(Status::kNone);
+  }
+
+ private:
+  cloud_page_blob _page_blob;
+  uint64_t _offset;
+  uint64_t _size;
+};
+
+class AzureWritableFile : public WritableFile {
+ public:
+  AzureWritableFile(cloud_page_blob& page_blob)
+      : _page_blob(page_blob),
+        _bufoffset(0),
+        _pageindex(0),
+        _size(0),
+        _iofail(false) {
+    _page_blob.create(4 * 1024);
+    std::string name = xdb_to_utf8string(_page_blob.name());
+  }
+
+  ~AzureWritableFile() {}
+
+  virtual Status Append(const char* src, size_t size) {
+    size_t remain = size;
+    while (remain > 0) {
+      size_t cap = _buf_size - _bufoffset;
+      char* target = _buffer + _bufoffset;
+      int len = (int)(remain > cap ? cap : remain);
+      memcpy(target, src, len);
+      target += len;
+      _bufoffset += len;
+      src += len;
+      _size += len;
+      if (cap < _page_size) {
+        Status s = Flush();
+        if (!s.ok()) {
+          return s;
+        }
+      }
+      remain -= len;
+    }
+    return Status::OK();
+  }
+
+  virtual Status Flush() {
+    if (!_page_blob.exists()) return Status::NotFound();
+    int numpages = _bufoffset / _page_size;
+    int remain = _bufoffset % _page_size;
+    int len = (numpages + (remain > 0 ? 1 : 0)) * _page_size;
+    if (len == 0) return Status::OK();
+    try {
+      if ((CurrSize() + _buf_size) >= Capacity()) {
+        Expand();
+      }
+      std::vector<char> buffer;
+      buffer.assign(&_buffer[0], &_buffer[len]);
+      concurrency::streams::istream page_stream =
+          concurrency::streams::bytestream::open_istream(buffer);
+      _page_blob.upload_pages(page_stream, _pageindex * _page_size,
+                              utility::string_t(U("")));
+      if (remain > 0) {
+        memcpy(_buffer, _buffer + numpages * _page_size, remain);
+      }
+      _bufoffset = remain;
+      _pageindex += numpages;
+      return Status::OK();
+    } catch (const azure::storage::storage_exception& e) {
+      if (!_iofail) {
+        _iofail = true;
+      } else {
+        return Status::Aborted();
+      }
+    }
+    return Status::NoSpace();
+  }
+
+  Status Append(const Slice& data) { return Append(data.data(), data.size()); }
+
+  Status PositionedAppend(const Slice& /* data */, uint64_t /* offset */) {
+    return Status::NotSupported();
+  }
+
+  Status InvalidateCache(size_t offset, size_t length) { return Status::OK(); }
+
+  Status Truncate(uint64_t size) {
+    try {
+      if (_page_blob.exists()) {
+        Sync();
+        _size = size;
+        _page_blob.resize(((size >> 9) + 1) << 9);
+      }
+    } catch (const azure::storage::storage_exception& e) {
+    }
+    return Status::OK();
+  }
+
+  Status Close() { return Status::OK(); }
+
+  Status Sync() {
+    try {
+      if (_page_blob.exists()) {
+        Flush();
+        _page_blob.metadata().reserve(1);
+        _page_blob.metadata()[xdb_size] =
+            xdb_to_utf16string(std::to_string(CurrSize()));
+        _page_blob.upload_metadata();
+      }
+    } catch (const azure::storage::storage_exception& e) {
+    }
+    return Status::OK();
+  }
+
+  size_t GetUniqueId(char* id, size_t max_size) const {
+    return XdbGetUniqueId(_page_blob, id, max_size);
+  }
+
+  const char* Name() { return xdb_to_utf8string(_page_blob.name()).c_str(); }
+
+ private:
+  inline uint64_t CurrSize() const { return _size; }
+
+  inline uint64_t Capacity() const { return _page_blob.properties().size(); }
+
+  inline void Expand() {
+    uint64_t size = (((_size + _buf_size) >> 9) + 1) << 9;
+    _page_blob.resize(size * 2);
+  }
+
+ private:
+  const static int _page_size = 512;
+  const static int _buf_size = 1024 * 2 * _page_size;
+  cloud_page_blob _page_blob;
+  int _bufoffset;
+  uint64_t _pageindex;
+  uint64_t _size;
+  bool _iofail;
+  char _buffer[_buf_size + _page_size];
+};
 
 AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
                    const std::string& src_object_prefix,
@@ -58,16 +336,17 @@ AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
   }
 
   if (has_two_unique_buckets_) {
-    if (src_bucket_region_ == dest_bucket_region_) {
+    if (src_bucket_connect_string == dest_bucket_connect_string) {
       // alls good
     } else {
       create_bucket_status_ =
           Status::InvalidArgument("Two different regions not supported");
       Log(InfoLogLevel::ERROR_LEVEL, info_log,
-          "[aws] NewAzureEnv Buckets %s, %s in two different regions %, %s "
+          "[azure] NewAzureEnv Buckets %s, %s in two different regions %, %s "
           "is not supported",
           src_bucket_prefix_.c_str(), dest_bucket_prefix_.c_str(),
-          src_bucket_region_.c_str(), dest_bucket_region_.c_str());
+          src_bucket_connect_string.c_str(),
+          dest_bucket_connect_string.c_str());
       return;
     }
   }
@@ -85,8 +364,9 @@ AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
     dest_container_ = blob_client.get_container_reference(
         xdb_to_utf16string(src_bucket_prefix));
     dest_container_.create_if_not_exists();
-
+    create_bucket_status_ = Status::OK();
   } catch (const azure::storage::storage_exception& e) {
+    create_bucket_status_ = Status::InvalidArgument();
     Log(InfoLogLevel::ERROR_LEVEL, info_log,
         "[azure] NewAzureEnv Unable to create environment %s", e.what());
   }
@@ -97,6 +377,85 @@ AzureEnv::~AzureEnv() {
   StopPurger();
   if (tid_.joinable()) {
     tid_.join();
+  }
+}
+
+Status AzureEnv::status() { return create_bucket_status_; }
+
+// Is this a sst file, i.e. ends in ".sst" or ".ldb"
+inline bool IsSstFile(const std::string& pathname) {
+  if (pathname.size() < sst.size()) {
+    return false;
+  }
+  const char* ptr = pathname.c_str() + pathname.size() - sst.size();
+  if ((memcmp(ptr, sst.c_str(), sst.size()) == 0) ||
+      (memcmp(ptr, ldb.c_str(), ldb.size()) == 0)) {
+    return true;
+  }
+  return false;
+}
+
+// A log file has ".log" suffix
+inline bool IsWalFile(const std::string& pathname) {
+  if (pathname.size() < log.size()) {
+    return false;
+  }
+  const char* ptr = pathname.c_str() + pathname.size() - log.size();
+  if (memcmp(ptr, log.c_str(), log.size()) == 0) {
+    return true;
+  }
+  return false;
+}
+
+bool IsManifestFile(const std::string& pathname) {
+  // extract last component of the path
+  std::string fname;
+  size_t offset = pathname.find_last_of(pathsep);
+  if (offset != std::string::npos) {
+    fname = pathname.substr(offset + 1, pathname.size());
+  } else {
+    fname = pathname;
+  }
+  if (fname.find("MANIFEST") == 0) {
+    return true;
+  }
+  return false;
+}
+
+bool __attribute__((unused)) IsIdentityFile(const std::string& pathname) {
+  // extract last component of the path
+  std::string fname;
+  size_t offset = pathname.find_last_of(pathsep);
+  if (offset != std::string::npos) {
+    fname = pathname.substr(offset + 1, pathname.size());
+  } else {
+    fname = pathname;
+  }
+  if (fname.find("IDENTITY") == 0) {
+    return true;
+  }
+  return false;
+}
+
+// A log file has ".log" suffix or starts with 'MANIFEST"
+inline bool IsLogFile(const std::string& pathname) {
+  return IsWalFile(pathname) || IsManifestFile(pathname);
+}
+
+static void GetFileType(const std::string& fname, bool* sstFile, bool* logFile,
+                        bool* manifest, bool* identity) {
+  *logFile = false;
+  if (manifest) *manifest = false;
+
+  *sstFile = IsSstFile(fname);
+  if (!*sstFile) {
+    *logFile = IsLogFile(fname);
+    if (manifest) {
+      *manifest = IsManifestFile(fname);
+    }
+    if (identity) {
+      *identity = IsIdentityFile(fname);
+    }
   }
 }
 
@@ -170,6 +529,13 @@ Status AzureEnv::NewWritableFile(const std::string& fname,
 Status AzureEnv::NewSequentialFile(const std::string& fname,
                                    unique_ptr<SequentialFile>* result,
                                    const EnvOptions& options) {
+  *result = nullptr;
+  Status st;
+  bool logfile;
+  bool sstfile;
+  bool manifest;
+  bool identity;
+  GetFileType(fname, &sstfile, &logfile, &manifest, &identity);
   return Status::OK();
 }
 
