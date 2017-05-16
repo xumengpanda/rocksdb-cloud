@@ -76,24 +76,110 @@ static size_t XdbGetUniqueId(const cloud_page_blob& page_blob, char* id,
   return len;
 }
 
+// Is this a sst file, i.e. ends in ".sst" or ".ldb"
+inline bool IsSstFile(const std::string& pathname) {
+  if (pathname.size() < sst.size()) {
+    return false;
+  }
+  const char* ptr = pathname.c_str() + pathname.size() - sst.size();
+  if ((memcmp(ptr, sst.c_str(), sst.size()) == 0) ||
+      (memcmp(ptr, ldb.c_str(), ldb.size()) == 0)) {
+    return true;
+  }
+  return false;
+}
+
+// A log file has ".log" suffix
+inline bool IsWalFile(const std::string& pathname) {
+  if (pathname.size() < log.size()) {
+    return false;
+  }
+  const char* ptr = pathname.c_str() + pathname.size() - log.size();
+  if (memcmp(ptr, log.c_str(), log.size()) == 0) {
+    return true;
+  }
+  return false;
+}
+
+bool IsManifestFile(const std::string& pathname) {
+  // extract last component of the path
+  std::string fname;
+  size_t offset = pathname.find_last_of(pathsep);
+  if (offset != std::string::npos) {
+    fname = pathname.substr(offset + 1, pathname.size());
+  } else {
+    fname = pathname;
+  }
+  if (fname.find("MANIFEST") == 0) {
+    return true;
+  }
+  return false;
+}
+
+bool __attribute__((unused)) IsIdentityFile(const std::string& pathname) {
+  // extract last component of the path
+  std::string fname;
+  size_t offset = pathname.find_last_of(pathsep);
+  if (offset != std::string::npos) {
+    fname = pathname.substr(offset + 1, pathname.size());
+  } else {
+    fname = pathname;
+  }
+  if (fname.find("IDENTITY") == 0) {
+    return true;
+  }
+  return false;
+}
+
+// A log file has ".log" suffix or starts with 'MANIFEST"
+inline bool IsLogFile(const std::string& pathname) {
+  return IsWalFile(pathname) || IsManifestFile(pathname);
+}
+
+static void GetFileType(const std::string& fname, bool* sstFile, bool* logFile,
+                        bool* manifest, bool* identity) {
+  *logFile = false;
+  if (manifest) *manifest = false;
+
+  *sstFile = IsSstFile(fname);
+  if (!*sstFile) {
+    *logFile = IsLogFile(fname);
+    if (manifest) {
+      *manifest = IsManifestFile(fname);
+    }
+    if (identity) {
+      *identity = IsIdentityFile(fname);
+    }
+  }
+}
+
 class AzureReadableFile : virtual public SequentialFile,
                           virtual public RandomAccessFile {
  public:
+  AzureReadableFile(AzureEnv* env, const std::string& bucket_prefix,
+                    const std::string& fname, bool is_file = true)
+      : env_(env), fname_(fname), offset_(0), file_size_(0), is_file_(is_file) {
+    Log(InfoLogLevel::DEBUG_LEVEL, env_->info_log_,
+        "[azure] AzureReadableFile opening file %s", fname_.c_str());
+    assert(!is_file_ || IsSstFile(fname) || IsManifestFile(fname) ||
+           IsIdentityFile(fname));
+  }
+
   AzureReadableFile(cloud_page_blob& page_blob)
-      : _page_blob(page_blob), _offset(0) {
+      : offset_(0), _page_blob(page_blob) {
     try {
       _page_blob.download_attributes();
       std::string size = xdb_to_utf8string(_page_blob.metadata()[xdb_size]);
-      _size = size.empty() ? -1 : std::stoll(size);
+      file_size_ = size.empty() ? -1 : std::stoll(size);
     } catch (const azure::storage::storage_exception& e) {
-      _size = -1;
+      file_size_ = -1;
     }
   }
 
   ~AzureReadableFile() {}
 
   virtual Status Read(size_t n, Slice* result, char* scratch) {
-    return ReadContents(&_offset, n, result, scratch);
+    return ReadContents(&offset_, n, result, scratch);
   }
 
   virtual Status Read(uint64_t offset, size_t n, Slice* result,
@@ -101,8 +187,10 @@ class AzureReadableFile : virtual public SequentialFile,
     return ReadContents(&offset, n, result, scratch);
   }
 
+  virtual Status status() { return status_; }
+
   Status Skip(uint64_t n) {
-    _offset += n;
+    offset_ += n;
     return Status::OK();
   }
 
@@ -118,7 +206,7 @@ class AzureReadableFile : virtual public SequentialFile,
     try {
       uint64_t offset = *origin;
       uint64_t page_offset = (offset >> 9) << 9;
-      uint64_t sz = _size - offset;
+      uint64_t sz = file_size_ - offset;
       if (sz > n) sz = n;
       if (sz <= 0) {
         *result = Slice(scratch, 0);
@@ -159,13 +247,34 @@ class AzureReadableFile : virtual public SequentialFile,
   }
 
  private:
+  AzureEnv* env_;
+  std::string fname_;
+  uint64_t offset_;
+  uint64_t file_size_;
+  bool is_file_;  // is this a file or dir?
+  Status status_;
   cloud_page_blob _page_blob;
-  uint64_t _offset;
-  uint64_t _size;
 };
 
 class AzureWritableFile : public WritableFile {
  public:
+  AzureWritableFile(AzureEnv* env, const std::string& local_fname,
+                    const std::string& bucket_prefix,
+                    const std::string& cloud_fname, const EnvOptions& options,
+                    const CloudEnvOptions cloud_env_options)
+      : env_(env), fname_(local_fname) {
+    assert(IsSstFile(fname_) || IsManifestFile(fname_));
+
+    // Is this a manifest file?
+    is_manifest_ = IsManifestFile(fname_);
+
+    Log(InfoLogLevel::DEBUG_LEVEL, env_->info_log_,
+        "[azure] AzureWritableFile bucket %s opened local file %s "
+        "cloud file %s manifest %d",
+        bucket_prefix.c_str(), fname_.c_str(), cloud_fname.c_str(),
+        is_manifest_);
+  }
+
   AzureWritableFile(cloud_page_blob& page_blob)
       : _page_blob(page_blob),
         _bufoffset(0),
@@ -287,6 +396,9 @@ class AzureWritableFile : public WritableFile {
  private:
   const static int _page_size = 512;
   const static int _buf_size = 1024 * 2 * _page_size;
+  AzureEnv* env_;
+  std::string fname_;
+  bool is_manifest_;
   cloud_page_blob _page_blob;
   int _bufoffset;
   uint64_t _pageindex;
@@ -342,7 +454,8 @@ AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
       create_bucket_status_ =
           Status::InvalidArgument("Two different regions not supported");
       Log(InfoLogLevel::ERROR_LEVEL, info_log,
-          "[azure] NewAzureEnv Buckets %s, %s in two different regions %s, %s "
+          "[azure] NewAzureEnv Buckets %s, %s in two different regions %s, "
+          "%s "
           "is not supported",
           src_bucket_prefix_.c_str(), dest_bucket_prefix_.c_str(),
           src_bucket_connect_string.c_str(),
@@ -381,84 +494,6 @@ AzureEnv::~AzureEnv() {
 }
 
 Status AzureEnv::status() { return create_bucket_status_; }
-
-// Is this a sst file, i.e. ends in ".sst" or ".ldb"
-inline bool IsSstFile(const std::string& pathname) {
-  if (pathname.size() < sst.size()) {
-    return false;
-  }
-  const char* ptr = pathname.c_str() + pathname.size() - sst.size();
-  if ((memcmp(ptr, sst.c_str(), sst.size()) == 0) ||
-      (memcmp(ptr, ldb.c_str(), ldb.size()) == 0)) {
-    return true;
-  }
-  return false;
-}
-
-// A log file has ".log" suffix
-inline bool IsWalFile(const std::string& pathname) {
-  if (pathname.size() < log.size()) {
-    return false;
-  }
-  const char* ptr = pathname.c_str() + pathname.size() - log.size();
-  if (memcmp(ptr, log.c_str(), log.size()) == 0) {
-    return true;
-  }
-  return false;
-}
-
-bool IsManifestFile(const std::string& pathname) {
-  // extract last component of the path
-  std::string fname;
-  size_t offset = pathname.find_last_of(pathsep);
-  if (offset != std::string::npos) {
-    fname = pathname.substr(offset + 1, pathname.size());
-  } else {
-    fname = pathname;
-  }
-  if (fname.find("MANIFEST") == 0) {
-    return true;
-  }
-  return false;
-}
-
-bool __attribute__((unused)) IsIdentityFile(const std::string& pathname) {
-  // extract last component of the path
-  std::string fname;
-  size_t offset = pathname.find_last_of(pathsep);
-  if (offset != std::string::npos) {
-    fname = pathname.substr(offset + 1, pathname.size());
-  } else {
-    fname = pathname;
-  }
-  if (fname.find("IDENTITY") == 0) {
-    return true;
-  }
-  return false;
-}
-
-// A log file has ".log" suffix or starts with 'MANIFEST"
-inline bool IsLogFile(const std::string& pathname) {
-  return IsWalFile(pathname) || IsManifestFile(pathname);
-}
-
-static void GetFileType(const std::string& fname, bool* sstFile, bool* logFile,
-                        bool* manifest, bool* identity) {
-  *logFile = false;
-  if (manifest) *manifest = false;
-
-  *sstFile = IsSstFile(fname);
-  if (!*sstFile) {
-    *logFile = IsLogFile(fname);
-    if (manifest) {
-      *manifest = IsManifestFile(fname);
-    }
-    if (identity) {
-      *identity = IsIdentityFile(fname);
-    }
-  }
-}
-
 Status AzureEnv::NewLogger(const std::string& fname,
                            shared_ptr<Logger>* result) {
   return base_env_->NewLogger(fname, result);
@@ -540,7 +575,57 @@ Status AzureEnv::DeleteFile(const std::string& fname) {
 }
 
 Status AzureEnv::RenameFile(const std::string& src, const std::string& target) {
-  return Status::OK();
+  Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
+      "[azure] RenameFile src '%s' target '%s'", src.c_str(), target.c_str());
+
+  // Get file type of target
+  bool logfile;
+  bool sstfile;
+  bool manifestfile;
+  bool idfile;
+  GetFileType(target, &sstfile, &logfile, &manifestfile, &idfile);
+
+  if (sstfile) {
+    Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
+        "[aws] RenameFile source sstfile %s %s is not supported", src.c_str(),
+        target.c_str());
+    assert(0);
+    return Status::NotSupported(Slice(src), Slice(target));
+
+  } else if (logfile) {
+    // Rename should never be called on log files as well
+    Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+        "[aws] RenameFile source logfile %s %s is not supported", src.c_str(),
+        target.c_str());
+    assert(0);
+    return Status::NotSupported(Slice(src), Slice(target));
+
+  } else if (manifestfile) {
+    // Rename should never be called on manifest files as well
+    Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+        "[aws] RenameFile source manifest %s %s is not supported", src.c_str(),
+        target.c_str());
+    assert(0);
+    return Status::NotSupported(Slice(src), Slice(target));
+
+  } else if (!idfile || !has_dest_bucket_) {
+    return base_env_->RenameFile(src, target);
+  }
+  // Only ID file should come here
+  assert(idfile);
+  assert(has_dest_bucket_);
+  assert(basename(target) == "IDENTITY");
+
+  Status st = Status::OK();  // SaveIdentitytoAzure(src, destname(target));
+
+  // Do the rename on local filesystem too
+  if (st.ok()) {
+    st = base_env_->RenameFile(src, target);
+  }
+  Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
+      "[azure] RenameFile src %s target %s: %s", src.c_str(), target.c_str(),
+      st.ToString().c_str());
+  return st;
 }
 
 Status AzureEnv::FileExists(const std::string& fname) { return Status::OK(); }
@@ -621,7 +706,16 @@ Status AzureEnv::NewSequentialFileCloud(const std::string& bucket_prefix,
                                         const std::string& fname,
                                         unique_ptr<SequentialFile>* result,
                                         const EnvOptions& options) {
-  return Status::OK();
+  *result = nullptr;
+
+  AzureReadableFile* f = new AzureReadableFile(this, bucket_prefix, fname);
+  Status st = f->status();
+  if (!st.ok()) {
+    delete f;
+  } else {
+    result->reset(dynamic_cast<SequentialFile*>(f));
+  }
+  return st;
 }
 
 Status AzureEnv::GetFileModificationTime(const std::string& fname,
