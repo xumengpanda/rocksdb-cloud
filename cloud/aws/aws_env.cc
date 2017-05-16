@@ -88,7 +88,7 @@ AwsEnv::AwsEnv(Env* underlying_env, const std::string& src_bucket_prefix,
       create_bucket_status_ = Status::InvalidArgument(
               "Two different regions not supported");
       Log(InfoLogLevel::ERROR_LEVEL, info_log,
-          "[aws] NewAwsEnv Buckets %s, %s in two different regions %, %s "
+          "[aws] NewAwsEnv Buckets %s, %s in two different regions %s, %s "
           "is not supported",
           src_bucket_prefix_.c_str(), dest_bucket_prefix_.c_str(),
           src_bucket_region_.c_str(), dest_bucket_region_.c_str());
@@ -1192,7 +1192,7 @@ Status AwsEnv::GetPathForDbid(const std::string& bucket_prefix,
     if (s3err == Aws::S3::S3Errors::NO_SUCH_BUCKET ||
         s3err == Aws::S3::S3Errors::NO_SUCH_KEY ||
         s3err == Aws::S3::S3Errors::RESOURCE_NOT_FOUND ||
-        errmsg.find("Response code: 404") != std::string::npos) {
+        s3err == Aws::S3::S3Errors::UNKNOWN) {
       Log(InfoLogLevel::ERROR_LEVEL, info_log_,
           "[s3] %s GetPathForDbid error non-existent dbid %s %s",
           bucket.c_str(), dbid.c_str(), errmsg.c_str());
