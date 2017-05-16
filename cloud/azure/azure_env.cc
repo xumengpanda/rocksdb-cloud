@@ -1,15 +1,15 @@
 //  Copyright (c) 2016-present, Rockset, Inc.  All rights reserved.
 //
 
+#include "cloud/azure/azure_env.h"
 #include <unistd.h>
 #include <fstream>
 #include <iostream>
+#include "cloud/filename.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 #include "util/stderr_logger.h"
 #include "util/string_util.h"
-
-#include "cloud/azure/azure_env.h"
 
 #ifdef USE_AZURE
 
@@ -342,7 +342,7 @@ AzureEnv::AzureEnv(Env* underlying_env, const std::string& src_bucket_prefix,
       create_bucket_status_ =
           Status::InvalidArgument("Two different regions not supported");
       Log(InfoLogLevel::ERROR_LEVEL, info_log,
-          "[azure] NewAzureEnv Buckets %s, %s in two different regions %, %s "
+          "[azure] NewAzureEnv Buckets %s, %s in two different regions %s, %s "
           "is not supported",
           src_bucket_prefix_.c_str(), dest_bucket_prefix_.c_str(),
           src_bucket_connect_string.c_str(),
@@ -471,7 +471,73 @@ Status AzureEnv::DeleteDbid(const std::string& bucket_prefix,
   return Status::OK();
 }
 
-Status AzureEnv::DeleteFile(const std::string& fname) { return Status::OK(); }
+//
+// prepends the configured src object path name
+//
+std::string AzureEnv::srcname(const std::string& localname) {
+  assert(!src_bucket_prefix_.empty());
+  return src_object_prefix_ + "/" + basename(localname);
+}
+
+//
+// prepends the configured dest object path name
+//
+std::string AzureEnv::destname(const std::string& localname) {
+  assert(!dest_bucket_prefix_.empty());
+  return dest_object_prefix_ + "/" + basename(localname);
+}
+
+inline std::string GetBucket(const std::string& bucket_prefix) {
+  return "rockset." + bucket_prefix;
+}
+
+cloud_blob_container& AzureEnv::GetContainer(const std::string& name) {
+  return dest_container_;
+}
+
+Status AzureEnv::DeleteBlob(const std::string& bucket_prefix,
+                            const std::string& fname) {
+  try {
+    auto container = GetContainer(GetDestBucketPrefix());
+    cloud_page_blob page_blob =
+        container.get_page_blob_reference(xdb_to_utf16string(fname));
+    page_blob.delete_blob();
+    return Status::OK();
+  } catch (const azure::storage::storage_exception& e) {
+    Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+        "[xdb] EnvXdb DeleteBlob %s target with exception %s\n",
+        xdb_to_utf8string(fname).c_str(), e.what());
+    return Status::IOError();
+  }
+}
+
+Status AzureEnv::DeleteFile(const std::string& fname) {
+  Status st;
+  // Get file type
+  bool logfile;
+  bool sstfile;
+  bool manifest;
+  bool identity;
+
+  GetFileType(fname, &sstfile, &logfile, &manifest, &identity);
+
+  if (has_dest_bucket_ && (sstfile || manifest || identity)) {
+    st = DeleteBlob(GetDestBucketPrefix(), destname(fname));
+    if (!st.ok() && !st.IsNotFound()) {
+      Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+          "[azure] DeleteFile DeleteBlob file %s error %s", fname.c_str(),
+          st.ToString().c_str());
+      return st;
+    }
+    // delete from local
+    st = base_env_->DeleteFile(fname);
+  } else {
+    st = base_env_->DeleteFile(fname);
+  }
+  Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[azure] DeleteFile file %s %s",
+      fname.c_str(), st.ToString().c_str());
+  return st;
+}
 
 Status AzureEnv::RenameFile(const std::string& src, const std::string& target) {
   return Status::OK();

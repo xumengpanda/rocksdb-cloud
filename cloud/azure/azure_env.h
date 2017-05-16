@@ -19,6 +19,8 @@
 
 #undef DeleteFile
 
+using namespace azure::storage;
+
 namespace rocksdb {
 
 //
@@ -265,6 +267,16 @@ class AzureEnv : public CloudEnvImpl {
   bool has_two_unique_buckets_;
 
   Status status();
+
+  Status DeleteBlob(const std::string &bucket_prefix, const std::string &fname);
+
+  cloud_blob_container &GetContainer(const std::string &name);
+
+  // Converts a local pathname to an object name in the src bucket
+  std::string srcname(const std::string &localname);
+
+  // Converts a local pathname to an object name in the dest bucket
+  std::string destname(const std::string &localname);
 };
 
 }  // namespace rocksdb
