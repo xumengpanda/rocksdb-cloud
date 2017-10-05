@@ -1447,6 +1447,11 @@ bool BlockBasedTable::BlockEntryIteratorState::KeyReachedUpperBound(
   return reached_upper_bound;
 }
 
+bool BlockBasedTable::BlockEntryIteratorState::Compare(const Slice& a,
+                                                       const Slice& b) {
+  return icomparator_->Compare(a, b);
+}
+
 // This will be broken if the user specifies an unusual implementation
 // of Options.comparator, or if the user specifies an unusual
 // definition of prefixes in BlockBasedTableOptions.filter_policy.

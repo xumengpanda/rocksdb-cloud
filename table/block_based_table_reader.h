@@ -353,6 +353,7 @@ class BlockBasedTable::BlockEntryIteratorState : public TwoLevelIteratorState {
   InternalIterator* NewSecondaryIterator(const Slice& index_value) override;
   bool PrefixMayMatch(const Slice& internal_key) override;
   bool KeyReachedUpperBound(const Slice& internal_key) override;
+  bool Compare(const Slice& a, const Slice& b) override;
 
  private:
   // Don't own table_
