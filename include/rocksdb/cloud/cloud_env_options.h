@@ -221,6 +221,9 @@ class CloudEnv : public Env {
                            const std::string& bucket_name_prefix,
                            const std::string& bucket_object_path) = 0;
 
+  // Deletes file from a destination bucket.
+  virtual Status DeleteCloudFileFromDest(const std::string& fname) = 0;
+
   // Create a new AWS env.
   // src_bucket_name: bucket name suffix where db data is read from
   // src_object_prefix: all db objects in source bucket are prepended with this

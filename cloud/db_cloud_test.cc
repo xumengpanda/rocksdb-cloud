@@ -15,6 +15,7 @@
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
 #include "util/logging.h"
+#include "util/string_util.h"
 #include "util/testharness.h"
 #ifndef OS_WIN
 #include <unistd.h>
@@ -34,12 +35,10 @@ class CloudTest : public testing::Test {
     dest_bucket_prefix_ = src_bucket_prefix_;
     dest_object_prefix_ = src_object_prefix_;
     options_.create_if_missing = true;
-    db_ = nullptr;
-    aenv_ = nullptr;
     persistent_cache_path_ = "";
     persistent_cache_size_gb_ = 0;
 
-    DestroyDB(dbname_, Options());
+    DestroyDir(dbname_);
     CreateLoggerFromOptions(dbname_, options_, &options_.info_log);
 
     // Get cloud credentials
@@ -52,20 +51,33 @@ class CloudTest : public testing::Test {
   void Cleanup() {
     ASSERT_TRUE(!aenv_);
 
+    CloudEnv* aenv;
     // create a dummy aws env
     ASSERT_OK(CloudEnv::NewAwsEnv(
         base_env_, src_bucket_prefix_, src_object_prefix_, region_,
         dest_bucket_prefix_, dest_object_prefix_, region_, cloud_env_options_,
-        options_.info_log, &aenv_));
+        options_.info_log, &aenv));
+    aenv_.reset(aenv);
     // delete all pre-existing contents from the bucket
     Status st = aenv_->EmptyBucket(src_bucket_prefix_);
     ASSERT_TRUE(st.ok() || st.IsNotFound());
-    delete aenv_;
-    aenv_ = nullptr;
+    aenv_.reset();
 
     // delete and create directory where clones reside
     DestroyDir(clone_dir_);
     ASSERT_OK(base_env_->CreateDir(clone_dir_));
+  }
+
+  std::set<std::string> GetSSTFiles() {
+    std::vector<std::string> files;
+    aenv_->GetBaseEnv()->GetChildren(dbname_, &files);
+    std::set<std::string> sst_files;
+    for (auto& f : files) {
+      if (IsSstFile(RemoveEpoch(f))) {
+        sst_files.insert(f);
+      }
+    }
+    return sst_files;
   }
 
   void DestroyDir(const std::string& dir) {
@@ -76,15 +88,15 @@ class CloudTest : public testing::Test {
 
   virtual ~CloudTest() {
     CloseDB();
-    DestroyDB(dbname_, Options());
-    DestroyDir(clone_dir_);
   }
 
   void CreateAwsEnv() {
+    CloudEnv* aenv;
     ASSERT_OK(CloudEnv::NewAwsEnv(
         base_env_, src_bucket_prefix_, src_object_prefix_, region_,
         dest_bucket_prefix_, dest_object_prefix_, region_, cloud_env_options_,
-        options_.info_log, &aenv_));
+        options_.info_log, &aenv));
+    aenv_.reset(aenv);
   }
 
   // Open database via the cloud interface
@@ -94,7 +106,7 @@ class CloudTest : public testing::Test {
 
     // Create new AWS env
     CreateAwsEnv();
-    options_.env = aenv_;
+    options_.env = aenv_.get();
 
     // default column family
     ColumnFamilyOptions cfopt = options_;
@@ -171,10 +183,6 @@ class CloudTest : public testing::Test {
       delete db_;
       db_ = nullptr;
     }
-    if (aenv_) {
-      delete aenv_;
-      aenv_ = nullptr;
-    }
   }
 
   void SetPersistentCache(const std::string& path, uint64_t size_gb) {
@@ -184,8 +192,8 @@ class CloudTest : public testing::Test {
 
   Status GetCloudLiveFilesSrc(std::set<uint64_t>* list) {
     std::unique_ptr<ManifestReader> manifest(
-        new ManifestReader(options_.info_log, aenv_, src_bucket_prefix_));
-    return manifest->GetLiveFiles(src_object_prefix_ + "/MANIFEST", list);
+        new ManifestReader(options_.info_log, aenv_.get(), src_bucket_prefix_));
+    return manifest->GetLiveFiles(src_object_prefix_, list);
   }
 
  protected:
@@ -203,7 +211,7 @@ class CloudTest : public testing::Test {
   std::string persistent_cache_path_;
   uint64_t persistent_cache_size_gb_;
   DBCloud* db_;
-  CloudEnv* aenv_;
+  unique_ptr<CloudEnv> aenv_;
 };
 
 //
@@ -238,7 +246,7 @@ TEST_F(CloudTest, GetChildrenTest) {
   ASSERT_OK(db_->Flush(FlushOptions()));
 
   CloseDB();
-  DestroyDB(dbname_, Options());
+  DestroyDir(dbname_);
   OpenDB();
 
   std::vector<std::string> children;
@@ -333,6 +341,8 @@ TEST_F(CloudTest, Newdb) {
     ASSERT_OK(cloud_db->Get(ReadOptions(), "Dhruba", &value));
     ASSERT_TRUE(value.compare("Borthakur") == 0);
   }
+
+  CloseDB();
 }
 
 //
@@ -468,9 +478,7 @@ TEST_F(CloudTest, KeepLocalFiles) {
   ASSERT_OK(db_->Flush(FlushOptions()));
 
   CloseDB();
-
-  DestroyDB(dbname_, Options());
-
+  DestroyDir(dbname_);
   OpenDB();
 
   std::vector<std::string> files;
@@ -494,7 +502,7 @@ TEST_F(CloudTest, CopyToFromS3) {
   // Create aws env
   cloud_env_options_.keep_local_sst_files = true;
   CreateAwsEnv();
-  ASSERT_NE(aenv_, nullptr);
+  ((CloudEnvImpl*)aenv_.get())->TEST_InitEmptyCloudManifest();
   char buffer[1 * 1024 * 1024];
 
   // create a 10 MB file and upload it to cloud
@@ -533,7 +541,8 @@ TEST_F(CloudTest, DelayFileDeletion) {
   // Create aws env
   cloud_env_options_.keep_local_sst_files = true;
   CreateAwsEnv();
-  ((AwsEnv*)aenv_)->TEST_SetFileDeletionDelay(std::chrono::seconds(2));
+  ((CloudEnvImpl*)aenv_.get())->TEST_InitEmptyCloudManifest();
+  ((AwsEnv*)aenv_.get())->TEST_SetFileDeletionDelay(std::chrono::seconds(2));
 
   auto createFile = [&]() {
     unique_ptr<WritableFile> writer;
@@ -598,12 +607,14 @@ TEST_F(CloudTest, Savepoint) {
     cloud_db->GetLiveFilesMetaData(&flist);
     ASSERT_TRUE(flist.size() == 1);
 
+    auto remapped_fname =
+        ((CloudEnvImpl*)cloud_env.get())->RemapFilename(flist[0].name);
     // source path
-    std::string spath = src_object_prefix_ + flist[0].name;
+    std::string spath = src_object_prefix_ + "/" + remapped_fname;
     ASSERT_OK(cloud_env->ExistsObject(src_bucket_prefix_, spath));
 
     // Verify that the destination path does not have any sst files
-    std::string dpath = dest_path + flist[0].name;
+    std::string dpath = dest_path + "/" + remapped_fname;
     ASSERT_TRUE(
         cloud_env->ExistsObject(src_bucket_prefix_, dpath).IsNotFound());
 
@@ -672,6 +683,166 @@ TEST_F(CloudTest, KeepLocalLog) {
   ASSERT_OK(db_->Flush(FlushOptions()));
 
   CloseDB();
+}
+
+// Test whether we are able to recover nicely from two different writers to the
+// same S3 bucket. (The feature that was enabled by CLOUDMANIFEST)
+TEST_F(CloudTest, TwoDBsOneBucket) {
+  auto firstDB = dbname_;
+  auto secondDB = dbname_ + "-1";
+  cloud_env_options_.keep_local_sst_files = true;
+  std::string value;
+
+  OpenDB();
+  // Create two files
+  ASSERT_OK(db_->Put(WriteOptions(), "First", "File"));
+  ASSERT_OK(db_->Flush(FlushOptions()));
+  ASSERT_OK(db_->Put(WriteOptions(), "Second", "File"));
+  ASSERT_OK(db_->Flush(FlushOptions()));
+  auto files = GetSSTFiles();
+  EXPECT_EQ(files.size(), 2);
+  CloseDB();
+
+  // Open again, with no destination bucket
+  dest_bucket_prefix_.clear();
+  dest_object_prefix_.clear();
+  OpenDB();
+  ASSERT_OK(db_->Put(WriteOptions(), "Third", "File"));
+  ASSERT_OK(db_->Flush(FlushOptions()));
+  auto newFiles = GetSSTFiles();
+  EXPECT_EQ(newFiles.size(), 3);
+  // Remember the third file we created
+  std::vector<std::string> diff;
+  std::set_difference(newFiles.begin(), newFiles.end(), files.begin(),
+                      files.end(), std::inserter(diff, diff.begin()));
+  ASSERT_EQ(diff.size(), 1);
+  auto thirdFile = diff[0];
+  CloseDB();
+
+  // Open in a different directory with destination bucket set
+  dbname_ = secondDB;
+  dest_bucket_prefix_ = src_bucket_prefix_;
+  dest_object_prefix_ = src_object_prefix_;
+  OpenDB();
+  ASSERT_OK(db_->Put(WriteOptions(), "Third", "DifferentFile"));
+  ASSERT_OK(db_->Flush(FlushOptions()));
+  CloseDB();
+
+  // Open back in the first directory with no destination
+  dbname_ = firstDB;
+  dest_bucket_prefix_.clear();
+  dest_object_prefix_.clear();
+  OpenDB();
+  // Changes to the cloud database should make no difference for us
+  ASSERT_OK(db_->Get(ReadOptions(), "Third", &value));
+  EXPECT_EQ(value, "File");
+  CloseDB();
+
+  // Reopen in the first directory, this time with destination path
+  dbname_ = firstDB;
+  dest_bucket_prefix_ = src_bucket_prefix_;
+  dest_object_prefix_ = src_object_prefix_;
+  OpenDB();
+  // Changes to the cloud database should be pulled down now.
+  ASSERT_OK(db_->Get(ReadOptions(), "Third", &value));
+  EXPECT_EQ(value, "DifferentFile");
+  files = GetSSTFiles();
+  // Should no longer be in my directory because it's not part of the new
+  // MANIFEST.
+  EXPECT_TRUE(files.find(thirdFile) == files.end());
+  CloseDB();
+}
+
+// This test is similar to TwoDBsOneBucket, but is much more chaotic and illegal
+// -- it runs two databases on exact same S3 bucket. The work on CLOUDMANIFEST
+// enables us to run in that configuration for extended amount of time (1 hour
+// by default) without any issues -- the last CLOUDMANIFEST writer wins.
+TEST_F(CloudTest, TwoConcurrentWriters) {
+  auto firstDB = dbname_;
+  auto secondDB = dbname_ + "-1";
+
+  DBCloud *db1, *db2;
+  CloudEnv *aenv1, *aenv2;
+
+  auto openDB1 = [&] {
+    dbname_ = firstDB;
+    OpenDB();
+    db1 = db_;
+    db_ = nullptr;
+    aenv1 = aenv_.release();
+  };
+  auto openDB2 = [&] {
+    dbname_ = secondDB;
+    OpenDB();
+    db2 = db_;
+    db_ = nullptr;
+    aenv2 = aenv_.release();
+  };
+  auto closeDB1 = [&] {
+    db_ = db1;
+    aenv_.reset(aenv1);
+    CloseDB();
+  };
+  auto closeDB2 = [&] {
+    db_ = db2;
+    aenv_.reset(aenv2);
+    CloseDB();
+  };
+
+  openDB1();
+  openDB2();
+
+  // Create bunch of files, reopening the databases during
+  for (int i = 0; i < 5; ++i) {
+    closeDB1();
+    if (i == 2) {
+      DestroyDir(firstDB);
+    }
+    // opening the database makes me a master (i.e. CLOUDMANIFEST points to my
+    // manifest), my writes are applied to the shared space!
+    openDB1();
+    for (int j = 0; j < 5; ++j) {
+      auto key = ToString(i) + ToString(j) + "1";
+      ASSERT_OK(db1->Put(WriteOptions(), key, "FirstDB"));
+      ASSERT_OK(db1->Flush(FlushOptions()));
+    }
+    closeDB2();
+    if (i == 2) {
+      DestroyDir(secondDB);
+    }
+    // opening the database makes me a master (i.e. CLOUDMANIFEST points to my
+    // manifest), my writes are applied to the shared space!
+    openDB2();
+    for (int j = 0; j < 5; ++j) {
+      auto key = ToString(i) + ToString(j) + "2";
+      ASSERT_OK(db2->Put(WriteOptions(), key, "SecondDB"));
+      ASSERT_OK(db2->Flush(FlushOptions()));
+    }
+  }
+
+  dbname_ = firstDB;
+  // This write should not be applied, because DB2 is currently the owner of the
+  // S3 bucket
+  ASSERT_OK(db1->Put(WriteOptions(), "ShouldNotBeApplied", ""));
+  ASSERT_OK(db1->Flush(FlushOptions()));
+
+  closeDB1();
+  closeDB2();
+
+  openDB1();
+  for (int i = 0; i < 5; ++i) {
+    for (int j = 0; j < 5; ++j) {
+      std::string val;
+      auto key = ToString(i) + ToString(j);
+      ASSERT_OK(db1->Get(ReadOptions(), key + "1", &val));
+      EXPECT_EQ(val, "FirstDB");
+      ASSERT_OK(db1->Get(ReadOptions(), key + "2", &val));
+      EXPECT_EQ(val, "SecondDB");
+    }
+  }
+
+  std::string v;
+  ASSERT_TRUE(db1->Get(ReadOptions(), "ShouldNotBeApplied", &v).IsNotFound());
 }
 
 #ifdef AWS_DO_NOT_RUN

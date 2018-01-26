@@ -15,6 +15,10 @@ namespace rocksdb {
 //
 // Database with Cloud support.
 //
+// Important: The caller is responsible for ensuring that only one database at
+// a time is running with the same cloud destination bucket and path. Running
+// two databases concurrently with the same destination path will lead to
+// corruption if it lasts for more than couple of minutes.
 class DBCloud : public StackableDB {
  public:
   // This API is to open a DB when key-values are to be made durable by
