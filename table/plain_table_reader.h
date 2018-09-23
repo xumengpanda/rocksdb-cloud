@@ -18,9 +18,11 @@
 #include "rocksdb/table.h"
 #include "rocksdb/table_properties.h"
 #include "table/table_reader.h"
+#include "table/format.h"
 #include "table/plain_table_factory.h"
 #include "table/plain_table_index.h"
 #include "util/arena.h"
+#include "util/cache_allocator.h"
 #include "util/dynamic_bloom.h"
 #include "util/file_reader_writer.h"
 
@@ -149,8 +151,8 @@ class PlainTableReader: public TableReader {
   DynamicBloom bloom_;
   PlainTableReaderFileInfo file_info_;
   Arena arena_;
-  std::unique_ptr<char[]> index_block_alloc_;
-  std::unique_ptr<char[]> bloom_block_alloc_;
+  CacheAllocationPtr index_block_alloc_;
+  CacheAllocationPtr bloom_block_alloc_;
 
   const ImmutableCFOptions& ioptions_;
   uint64_t file_size_;

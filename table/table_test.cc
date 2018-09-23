@@ -2313,6 +2313,69 @@ TEST_F(BlockBasedTableTest, BlockCacheLeak) {
   c.ResetTableReader();
 }
 
+namespace {
+class CustomCacheAllocator : public CacheAllocator {
+ public:
+  void* allocate(size_t size) const {
+    ++numAllocations;
+    auto ptr = new char[size + 16];
+    memcpy(ptr, "cache_allocator_", 16);  // mangle first 16 bytes
+    return reinterpret_cast<void*>(ptr + 16);
+  }
+  void deallocate(void* p) const {
+    ++numDeallocations;
+    char* ptr = reinterpret_cast<char*>(p) - 16;
+    delete[] ptr;
+  }
+
+  mutable std::atomic<int> numAllocations;
+  mutable std::atomic<int> numDeallocations;
+};
+}  // namespace
+
+TEST_F(BlockBasedTableTest, CacheAllocator) {
+  auto custom_cache_allocator = std::make_shared<CustomCacheAllocator>();
+  {
+    Options opt;
+    unique_ptr<InternalKeyComparator> ikc;
+    ikc.reset(new test::PlainInternalKeyComparator(opt.comparator));
+    opt.compression = kNoCompression;
+    BlockBasedTableOptions table_options;
+    table_options.block_size = 1024;
+    table_options.block_cache = NewLRUCache(16 * 1024 * 1024, 4);
+    table_options.cache_allocator = custom_cache_allocator;
+    opt.table_factory.reset(NewBlockBasedTableFactory(table_options));
+
+    TableConstructor c(BytewiseComparator(),
+                       true /* convert_to_internal_key_ */);
+    c.Add("k01", "hello");
+    c.Add("k02", "hello2");
+    c.Add("k03", std::string(10000, 'x'));
+    c.Add("k04", std::string(200000, 'x'));
+    c.Add("k05", std::string(300000, 'x'));
+    c.Add("k06", "hello3");
+    c.Add("k07", std::string(100000, 'x'));
+    std::vector<std::string> keys;
+    stl_wrappers::KVMap kvmap;
+    const ImmutableCFOptions ioptions(opt);
+    c.Finish(opt, ioptions, table_options, *ikc, &keys, &kvmap);
+
+    unique_ptr<InternalIterator> iter(c.NewIterator());
+    iter->SeekToFirst();
+    while (iter->Valid()) {
+      iter->key();
+      iter->value();
+      iter->Next();
+    }
+    ASSERT_OK(iter->status());
+  }
+
+  // out of scope, block cache should have been deleted, all allocations
+  // deallocated
+  EXPECT_EQ(custom_cache_allocator->numAllocations.load(),
+            custom_cache_allocator->numDeallocations.load());
+}
+
 TEST_F(BlockBasedTableTest, NewIndexIteratorLeak) {
   // A regression test to avoid data race described in
   // https://github.com/facebook/rocksdb/issues/1267

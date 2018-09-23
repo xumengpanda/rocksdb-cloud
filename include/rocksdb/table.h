@@ -48,6 +48,19 @@ enum ChecksumType : char {
   kxxHash = 0x2,
 };
 
+// All methods should be thread-safe
+class CacheAllocator {
+ public:
+  virtual ~CacheAllocator() = default;
+
+  virtual void* allocate(size_t size) const = 0;
+  virtual void deallocate(void* p) const = 0;
+  virtual size_t usable_size(void* p, size_t allocation_size) const {
+    // default implementation just returns the allocation size
+    return allocation_size;
+  }
+};
+
 // For advanced user only
 struct BlockBasedTableOptions {
   // @flush_block_policy_factory creates the instances of flush block policy.
@@ -106,6 +119,12 @@ struct BlockBasedTableOptions {
   // then no block cache should be used, and the block_cache should
   // point to a nullptr object.
   bool no_block_cache = false;
+
+  // If non-nullptr will use this allocator instead of system allocator when
+  // allocating memory for cache blocks.
+  // You should hold an instance of the the cache_allocator alive as long
+  // as block_cache is alive.
+  std::shared_ptr<CacheAllocator> cache_allocator = nullptr;
 
   // If non-NULL use the specified cache for blocks.
   // If NULL, rocksdb will automatically create and use an 8MB internal cache.

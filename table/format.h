@@ -8,17 +8,18 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #pragma once
-#include <string>
 #include <stdint.h>
+#include <string>
+#include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
-#include "rocksdb/options.h"
 #include "rocksdb/table.h"
 
 #include "options/cf_options.h"
 #include "port/port.h"  // noexcept
 #include "table/persistent_cache_options.h"
 #include "util/file_reader_writer.h"
+#include "util/cache_allocator.h"
 
 namespace rocksdb {
 
@@ -53,13 +54,9 @@ class BlockHandle {
 
   // if the block handle's offset and size are both "0", we will view it
   // as a null block handle that points to no where.
-  bool IsNull() const {
-    return offset_ == 0 && size_ == 0;
-  }
+  bool IsNull() const { return offset_ == 0 && size_ == 0; }
 
-  static const BlockHandle& NullBlockHandle() {
-    return kNullBlockHandle;
-  }
+  static const BlockHandle& NullBlockHandle() { return kNullBlockHandle; }
 
   // Maximum encoding length of a BlockHandle
   enum { kMaxEncodedLength = 10 + 10 };
@@ -182,10 +179,11 @@ Status ReadFooterFromFile(RandomAccessFileReader* file,
 static const size_t kBlockTrailerSize = 5;
 
 struct BlockContents {
-  Slice data;           // Actual contents of data
-  bool cachable;        // True iff data can be cached
+  Slice data;     // Actual contents of data
+  bool cachable;  // True iff data can be cached
   CompressionType compression_type;
-  std::unique_ptr<char[]> allocation;
+
+  CacheAllocationPtr allocation;
 
   BlockContents() : cachable(false), compression_type(kNoCompression) {}
 
@@ -193,14 +191,24 @@ struct BlockContents {
                 CompressionType _compression_type)
       : data(_data), cachable(_cachable), compression_type(_compression_type) {}
 
-  BlockContents(std::unique_ptr<char[]>&& _data, size_t _size, bool _cachable,
+  BlockContents(CacheAllocationPtr&& _data, size_t _size, bool _cachable,
                 CompressionType _compression_type)
       : data(_data.get(), _size),
         cachable(_cachable),
         compression_type(_compression_type),
         allocation(std::move(_data)) {}
 
-  BlockContents(BlockContents&& other) ROCKSDB_NOEXCEPT { *this = std::move(other); }
+  BlockContents(std::unique_ptr<char[]>&& _data, size_t _size, bool _cachable,
+                CompressionType _compression_type)
+      : data(_data.get(), _size),
+        cachable(_cachable),
+        compression_type(_compression_type) {
+    allocation.reset(_data.release());
+  }
+
+  BlockContents(BlockContents&& other) ROCKSDB_NOEXCEPT {
+    *this = std::move(other);
+  }
 
   BlockContents& operator=(BlockContents&& other) {
     data = std::move(other.data);
@@ -231,7 +239,8 @@ extern Status UncompressBlockContents(const char* data, size_t n,
                                       BlockContents* contents,
                                       uint32_t compress_format_version,
                                       const Slice& compression_dict,
-                                      const ImmutableCFOptions &ioptions);
+                                      const ImmutableCFOptions& ioptions,
+                                      CacheAllocator* allocator);
 
 // This is an extension to UncompressBlockContents that accepts
 // a specific compression type. This is used by un-wrapped blocks
@@ -239,7 +248,8 @@ extern Status UncompressBlockContents(const char* data, size_t n,
 extern Status UncompressBlockContentsForCompressionType(
     const char* data, size_t n, BlockContents* contents,
     uint32_t compress_format_version, const Slice& compression_dict,
-    CompressionType compression_type, const ImmutableCFOptions &ioptions);
+    CompressionType compression_type, const ImmutableCFOptions& ioptions,
+    CacheAllocator* allocator);
 
 // Implementation details follow.  Clients should ignore,
 
@@ -247,9 +257,7 @@ extern Status UncompressBlockContentsForCompressionType(
 // BlockHandle. Currently we use zeros for null and use negation-of-zeros for
 // uninitialized.
 inline BlockHandle::BlockHandle()
-    : BlockHandle(~static_cast<uint64_t>(0),
-                  ~static_cast<uint64_t>(0)) {
-}
+    : BlockHandle(~static_cast<uint64_t>(0), ~static_cast<uint64_t>(0)) {}
 
 inline BlockHandle::BlockHandle(uint64_t _offset, uint64_t _size)
     : offset_(_offset), size_(_size) {}

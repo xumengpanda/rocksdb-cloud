@@ -1130,7 +1130,7 @@ Status BlobDBImpl::GetBlobValue(const Slice& key, const Slice& index_entry,
       s = UncompressBlockContentsForCompressionType(
           blob_value.data(), blob_value.size(), &contents,
           kBlockBasedTableVersionFormat, Slice(), bfile->compression(),
-          *(cfh->cfd()->ioptions()));
+          *(cfh->cfd()->ioptions()), nullptr /* allocator */);
     }
     value->PinSelf(contents.data);
   }

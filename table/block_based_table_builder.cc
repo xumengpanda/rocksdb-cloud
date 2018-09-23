@@ -41,6 +41,7 @@
 #include "table/table_builder.h"
 
 #include "util/string_util.h"
+#include "util/cache_allocator.h"
 #include "util/coding.h"
 #include "util/compression.h"
 #include "util/crc32c.h"
@@ -498,7 +499,7 @@ void BlockBasedTableBuilder::WriteBlock(const Slice& raw_block_contents,
       Status stat = UncompressBlockContentsForCompressionType(
           block_contents.data(), block_contents.size(), &contents,
           r->table_options.format_version, compression_dict, type,
-          r->ioptions);
+          r->ioptions, nullptr);
 
       if (stat.ok()) {
         bool compressed_ok = contents.data.compare(raw_block_contents) == 0;
@@ -607,7 +608,7 @@ Status BlockBasedTableBuilder::InsertBlockInCache(const Slice& block_contents,
 
     size_t size = block_contents.size();
 
-    std::unique_ptr<char[]> ubuf(new char[size + 1]);
+    CacheAllocationPtr ubuf(new char[size + 1]);
     memcpy(ubuf.get(), block_contents.data(), size);
     ubuf[size] = type;
 

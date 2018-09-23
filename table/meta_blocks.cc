@@ -182,7 +182,8 @@ Status ReadProperties(const Slice& handle_value, RandomAccessFileReader* file,
 
   BlockFetcher block_fetcher(
       file, prefetch_buffer, footer, read_options, handle, &block_contents,
-      ioptions, false /* decompress */, compression_dict, cache_options);
+      ioptions, false /* decompress */, compression_dict, cache_options,
+      nullptr /* allocator */);
   s = block_fetcher.ReadBlockContents();
 
   if (!s.ok()) {
@@ -304,7 +305,7 @@ Status ReadTableProperties(RandomAccessFileReader* file, uint64_t file_size,
   BlockFetcher block_fetcher(
       file, nullptr /* prefetch_buffer */, footer, read_options,
       metaindex_handle, &metaindex_contents, ioptions, false /* decompress */,
-      compression_dict, cache_options);
+      compression_dict, cache_options, nullptr /* allocator */);
   s = block_fetcher.ReadBlockContents();
   if (!s.ok()) {
     return s;
@@ -366,7 +367,8 @@ Status FindMetaBlock(RandomAccessFileReader* file, uint64_t file_size,
   BlockFetcher block_fetcher(
       file, nullptr /* prefetch_buffer */, footer, read_options,
       metaindex_handle, &metaindex_contents, ioptions,
-      false /* do decompression */, compression_dict, cache_options);
+      false /* do decompression */, compression_dict, cache_options,
+      nullptr /* allocator */);
   s = block_fetcher.ReadBlockContents();
   if (!s.ok()) {
     return s;
@@ -405,7 +407,7 @@ Status ReadMetaBlock(RandomAccessFileReader* file,
   BlockFetcher block_fetcher(file, prefetch_buffer, footer, read_options,
                              metaindex_handle, &metaindex_contents, ioptions,
                              false /* decompress */, compression_dict,
-                             cache_options);
+                             cache_options, nullptr /* allocator */);
   status = block_fetcher.ReadBlockContents();
   if (!status.ok()) {
     return status;
@@ -428,7 +430,8 @@ Status ReadMetaBlock(RandomAccessFileReader* file,
   // Reading metablock
   BlockFetcher block_fetcher2(
       file, prefetch_buffer, footer, read_options, block_handle, contents,
-      ioptions, false /* decompress */, compression_dict, cache_options);
+      ioptions, false /* decompress */, compression_dict, cache_options,
+      nullptr /* allocator */);
   return block_fetcher2.ReadBlockContents();
 }
 

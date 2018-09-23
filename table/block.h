@@ -145,7 +145,12 @@ class Block {
   size_t usable_size() const {
 #ifdef ROCKSDB_MALLOC_USABLE_SIZE
     if (contents_.allocation.get() != nullptr) {
-      return malloc_usable_size(contents_.allocation.get());
+      auto allocator = contents_.allocation.get_deleter().allocator;
+      if (allocator) {
+        return allocator->usable_size(contents_.allocation.get(), size_);
+      } else {
+        return malloc_usable_size(contents_.allocation.get());
+      }
     }
 #endif  // ROCKSDB_MALLOC_USABLE_SIZE
     return size_;

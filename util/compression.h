@@ -14,6 +14,8 @@
 #include <string>
 
 #include "rocksdb/options.h"
+#include "rocksdb/table.h"
+#include "util/cache_allocator.h"
 #include "util/coding.h"
 
 #ifdef SNAPPY
@@ -293,11 +295,10 @@ inline bool Zlib_Compress(const CompressionOptions& opts,
 // header in varint32 format
 // @param compression_dict Data for presetting the compression library's
 //    dictionary.
-inline char* Zlib_Uncompress(const char* input_data, size_t input_length,
-                             int* decompress_size,
-                             uint32_t compress_format_version,
-                             const Slice& compression_dict = Slice(),
-                             int windowBits = -14) {
+inline CacheAllocationPtr Zlib_Uncompress(
+    const char* input_data, size_t input_length, int* decompress_size,
+    uint32_t compress_format_version, const Slice& compression_dict = Slice(),
+    CacheAllocator* allocator = nullptr, int windowBits = -14) {
 #ifdef ZLIB
   uint32_t output_len = 0;
   if (compress_format_version == 2) {
@@ -339,9 +340,9 @@ inline char* Zlib_Uncompress(const char* input_data, size_t input_length,
   _stream.next_in = (Bytef *)input_data;
   _stream.avail_in = static_cast<unsigned int>(input_length);
 
-  char* output = new char[output_len];
+  auto output = AllocateBlock(output_len, allocator);
 
-  _stream.next_out = (Bytef *)output;
+  _stream.next_out = (Bytef *)output.get();
   _stream.avail_out = static_cast<unsigned int>(output_len);
 
   bool done = false;
@@ -359,19 +360,17 @@ inline char* Zlib_Uncompress(const char* input_data, size_t input_length,
         size_t old_sz = output_len;
         uint32_t output_len_delta = output_len/5;
         output_len += output_len_delta < 10 ? 10 : output_len_delta;
-        char* tmp = new char[output_len];
-        memcpy(tmp, output, old_sz);
-        delete[] output;
-        output = tmp;
+        auto tmp = AllocateBlock(output_len, allocator);
+        memcpy(tmp.get(), output.get(), old_sz);
+        output = std::move(tmp);
 
         // Set more output.
-        _stream.next_out = (Bytef *)(output + old_sz);
+        _stream.next_out = (Bytef *)(output.get() + old_sz);
         _stream.avail_out = static_cast<unsigned int>(output_len - old_sz);
         break;
       }
       case Z_BUF_ERROR:
       default:
-        delete[] output;
         inflateEnd(&_stream);
         return nullptr;
     }
@@ -449,9 +448,9 @@ inline bool BZip2_Compress(const CompressionOptions& opts,
 // block header
 // compress_format_version == 2 -- decompressed size is included in the block
 // header in varint32 format
-inline char* BZip2_Uncompress(const char* input_data, size_t input_length,
-                              int* decompress_size,
-                              uint32_t compress_format_version) {
+inline CacheAllocationPtr BZip2_Uncompress(
+    const char* input_data, size_t input_length, int* decompress_size,
+    uint32_t compress_format_version, CacheAllocator* allocator = nullptr) {
 #ifdef BZIP2
   uint32_t output_len = 0;
   if (compress_format_version == 2) {
@@ -479,9 +478,9 @@ inline char* BZip2_Uncompress(const char* input_data, size_t input_length,
   _stream.next_in = (char *)input_data;
   _stream.avail_in = static_cast<unsigned int>(input_length);
 
-  char* output = new char[output_len];
+  auto output = AllocateBlock(output_len, allocator);
 
-  _stream.next_out = (char *)output;
+  _stream.next_out = (char *)output.get();
   _stream.avail_out = static_cast<unsigned int>(output_len);
 
   bool done = false;
@@ -498,18 +497,16 @@ inline char* BZip2_Uncompress(const char* input_data, size_t input_length,
         assert(compress_format_version != 2);
         uint32_t old_sz = output_len;
         output_len = output_len * 1.2;
-        char* tmp = new char[output_len];
-        memcpy(tmp, output, old_sz);
-        delete[] output;
-        output = tmp;
+        auto tmp = AllocateBlock(output_len, allocator);
+        memcpy(tmp.get(), output.get(), old_sz);
+        output = std::move(tmp);
 
         // Set more output.
-        _stream.next_out = (char *)(output + old_sz);
+        _stream.next_out = (char *)(output.get() + old_sz);
         _stream.avail_out = static_cast<unsigned int>(output_len - old_sz);
         break;
       }
       default:
-        delete[] output;
         BZ2_bzDecompressEnd(&_stream);
         return nullptr;
     }
@@ -593,10 +590,10 @@ inline bool LZ4_Compress(const CompressionOptions& opts,
 // header in varint32 format
 // @param compression_dict Data for presetting the compression library's
 //    dictionary.
-inline char* LZ4_Uncompress(const char* input_data, size_t input_length,
-                            int* decompress_size,
-                            uint32_t compress_format_version,
-                            const Slice& compression_dict = Slice()) {
+inline CacheAllocationPtr LZ4_Uncompress(
+    const char* input_data, size_t input_length, int* decompress_size,
+    uint32_t compress_format_version, const Slice& compression_dict = Slice(),
+    CacheAllocator* allocator = nullptr) {
 #ifdef LZ4
   uint32_t output_len = 0;
   if (compress_format_version == 2) {
@@ -616,7 +613,7 @@ inline char* LZ4_Uncompress(const char* input_data, size_t input_length,
     input_data += 8;
   }
 
-  char* output = new char[output_len];
+  auto output = AllocateBlock(output_len, allocator);
 #if LZ4_VERSION_NUMBER >= 10400  // r124+
   LZ4_streamDecode_t* stream = LZ4_createStreamDecode();
   if (compression_dict.size()) {
@@ -624,17 +621,16 @@ inline char* LZ4_Uncompress(const char* input_data, size_t input_length,
                         static_cast<int>(compression_dict.size()));
   }
   *decompress_size = LZ4_decompress_safe_continue(
-      stream, input_data, output, static_cast<int>(input_length),
+      stream, input_data, output.get(), static_cast<int>(input_length),
       static_cast<int>(output_len));
   LZ4_freeStreamDecode(stream);
 #else   // up to r123
   *decompress_size =
-      LZ4_decompress_safe(input_data, output, static_cast<int>(input_length),
+      LZ4_decompress_safe(input_data, output.get(), static_cast<int>(input_length),
                           static_cast<int>(output_len));
 #endif  // LZ4_VERSION_NUMBER >= 10400
 
   if (*decompress_size < 0) {
-    delete[] output;
     return nullptr;
   }
   assert(*decompress_size == static_cast<int>(output_len));
@@ -771,9 +767,10 @@ inline bool ZSTD_Compress(const CompressionOptions& opts, const char* input,
 
 // @param compression_dict Data for presetting the compression library's
 //    dictionary.
-inline char* ZSTD_Uncompress(const char* input_data, size_t input_length,
-                             int* decompress_size,
-                             const Slice& compression_dict = Slice()) {
+inline CacheAllocationPtr ZSTD_Uncompress(
+    const char* input_data, size_t input_length, int* decompress_size,
+    const Slice& compression_dict = Slice(),
+    CacheAllocator* allocator = nullptr) {
 #ifdef ZSTD
   uint32_t output_len = 0;
   if (!compression::GetDecompressedSizeInfo(&input_data, &input_length,
@@ -781,17 +778,17 @@ inline char* ZSTD_Uncompress(const char* input_data, size_t input_length,
     return nullptr;
   }
 
-  char* output = new char[output_len];
+  auto output = AllocateBlock(output_len, allocator);
   size_t actual_output_length;
 #if ZSTD_VERSION_NUMBER >= 500  // v0.5.0+
   ZSTD_DCtx* context = ZSTD_createDCtx();
   actual_output_length = ZSTD_decompress_usingDict(
-      context, output, output_len, input_data, input_length,
+      context, output.get(), output_len, input_data, input_length,
       compression_dict.data(), compression_dict.size());
   ZSTD_freeDCtx(context);
 #else  // up to v0.4.x
   actual_output_length =
-      ZSTD_decompress(output, output_len, input_data, input_length);
+      ZSTD_decompress(output.get(), output_len, input_data, input_length);
 #endif  // ZSTD_VERSION_NUMBER >= 500
   assert(actual_output_length == output_len);
   *decompress_size = static_cast<int>(actual_output_length);
