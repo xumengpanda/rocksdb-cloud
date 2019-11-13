@@ -25,6 +25,7 @@
 #include "rocksdb/transaction_log.h"
 #include "rocksdb/types.h"
 #include "rocksdb/version.h"
+#include "rocksdb/pluggable_compaction.h"
 
 #ifdef _WIN32
 // Windows API macro interference
@@ -1425,6 +1426,27 @@ class DB {
     return Status::NotSupported("Supported only by secondary instance");
   }
 #endif  // !ROCKSDB_LITE
+
+  // Allow external software to compact a specified set of files. The output
+  // of the compaction is not installed on the db, but the set of output files
+  // are returned in PluggableCompactionResult.
+  virtual Status ExecuteRemoteCompactionRequest(
+      const PluggableCompactionParam& /* inputParams */,
+      PluggableCompactionResult* /* result */,
+      bool /* doSanitize */) {
+    return Status::NotSupported("ExecuteRemoteCompactionRequest() is not implemented.");
+  }
+
+  // Register a pluggable compaction service endpoint that will be called
+  // when a compaction needs to be done.
+  virtual Status RegisterPluggableCompactionService(
+      std::unique_ptr<PluggableCompactionService>) {
+    return Status::NotSupported("RegisterPluggableCompactionService not supported");
+  }
+
+  // Remove any pluggable compaction
+  virtual void UnRegisterPluggableCompactionService() {
+  }
 };
 
 // Destroy the contents of the specified database.
@@ -1455,7 +1477,6 @@ Status RepairDB(const std::string& dbname, const DBOptions& db_options,
 // @param options These options will be used for the database and for ALL column
 //                families encountered during the repair
 Status RepairDB(const std::string& dbname, const Options& options);
-
 #endif
 
 }  // namespace rocksdb
