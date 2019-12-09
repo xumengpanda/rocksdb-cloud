@@ -24,13 +24,15 @@
 #endif
 
 #include "cache/lru_cache.h"
-#include "db/db_impl.h"
+#include "db/blob_index.h"
+#include "db/db_impl/db_impl.h"
 #include "db/db_test_util.h"
 #include "db/dbformat.h"
 #include "db/job_context.h"
 #include "db/version_set.h"
 #include "db/write_batch_internal.h"
 #include "env/mock_env.h"
+#include "file/filename.h"
 #include "memtable/hash_linklist_rep.h"
 #include "monitoring/thread_status_util.h"
 #include "port/port.h"
@@ -53,19 +55,17 @@
 #include "rocksdb/utilities/checkpoint.h"
 #include "rocksdb/utilities/optimistic_transaction_db.h"
 #include "rocksdb/utilities/write_batch_with_index.h"
-#include "table/block_based_table_factory.h"
+#include "table/block_based/block_based_table_factory.h"
 #include "table/mock_table.h"
-#include "table/plain_table_factory.h"
+#include "table/plain/plain_table_factory.h"
 #include "table/scoped_arena_iterator.h"
+#include "test_util/sync_point.h"
+#include "test_util/testharness.h"
+#include "test_util/testutil.h"
 #include "util/compression.h"
-#include "util/file_reader_writer.h"
-#include "util/filename.h"
 #include "util/mutexlock.h"
 #include "util/rate_limiter.h"
 #include "util/string_util.h"
-#include "util/sync_point.h"
-#include "util/testharness.h"
-#include "util/testutil.h"
 #include "utilities/merge_operators.h"
 
 namespace rocksdb {
@@ -487,11 +487,11 @@ TEST_F(DBTest, PutSingleDeleteGet) {
     ASSERT_EQ("v2", Get(1, "foo2"));
     ASSERT_OK(SingleDelete(1, "foo"));
     ASSERT_EQ("NOT_FOUND", Get(1, "foo"));
-    // Skip HashCuckooRep as it does not support single delete. FIFO and
-    // universal compaction do not apply to the test case. Skip MergePut
-    // because single delete does not get removed when it encounters a merge.
-  } while (ChangeOptions(kSkipHashCuckoo | kSkipFIFOCompaction |
-                         kSkipUniversalCompaction | kSkipMergePut));
+    // Skip FIFO and universal compaction beccause they do not apply to the test
+    // case. Skip MergePut because single delete does not get removed when it
+    // encounters a merge.
+  } while (ChangeOptions(kSkipFIFOCompaction | kSkipUniversalCompaction |
+                         kSkipMergePut));
 }
 
 #ifdef AWS_DO_NOT_RUN
@@ -605,7 +605,7 @@ TEST_F(DBTest, ReadFromPersistedTier) {
         DestroyAndReopen(options);
       }
     }
-  } while (ChangeOptions(kSkipHashCuckoo));
+  } while (ChangeOptions());
 }
 #endif
 
@@ -642,11 +642,11 @@ TEST_F(DBTest, SingleDeleteFlush) {
 
     ASSERT_EQ("NOT_FOUND", Get(1, "bar"));
     ASSERT_EQ("NOT_FOUND", Get(1, "foo"));
-    // Skip HashCuckooRep as it does not support single delete. FIFO and
-    // universal compaction do not apply to the test case. Skip MergePut
-    // because merges cannot be combined with single deletions.
-  } while (ChangeOptions(kSkipHashCuckoo | kSkipFIFOCompaction |
-                         kSkipUniversalCompaction | kSkipMergePut));
+    // Skip FIFO and universal compaction beccause they do not apply to the test
+    // case. Skip MergePut because single delete does not get removed when it
+    // encounters a merge.
+  } while (ChangeOptions(kSkipFIFOCompaction | kSkipUniversalCompaction |
+                         kSkipMergePut));
 }
 
 TEST_F(DBTest, SingleDeletePutFlush) {
@@ -665,11 +665,11 @@ TEST_F(DBTest, SingleDeletePutFlush) {
     ASSERT_OK(Flush(1));
 
     ASSERT_EQ("[ ]", AllEntriesFor("a", 1));
-    // Skip HashCuckooRep as it does not support single delete. FIFO and
-    // universal compaction do not apply to the test case. Skip MergePut
-    // because merges cannot be combined with single deletions.
-  } while (ChangeOptions(kSkipHashCuckoo | kSkipFIFOCompaction |
-                         kSkipUniversalCompaction | kSkipMergePut));
+    // Skip FIFO and universal compaction beccause they do not apply to the test
+    // case. Skip MergePut because single delete does not get removed when it
+    // encounters a merge.
+  } while (ChangeOptions(kSkipFIFOCompaction | kSkipUniversalCompaction |
+                         kSkipMergePut));
 }
 
 // Disable because not all platform can run it.
@@ -885,7 +885,7 @@ TEST_F(DBTest, FlushMultipleMemtable) {
     writeOpt.disableWAL = true;
     options.max_write_buffer_number = 4;
     options.min_write_buffer_number_to_merge = 3;
-    options.max_write_buffer_number_to_maintain = -1;
+    options.max_write_buffer_size_to_maintain = -1;
     CreateAndReopenWithCF({"pikachu"}, options);
     ASSERT_OK(dbfull()->Put(writeOpt, handles_[1], "foo", "v1"));
     ASSERT_OK(Flush(1));
@@ -903,7 +903,8 @@ TEST_F(DBTest, FlushSchedule) {
   options.level0_stop_writes_trigger = 1 << 10;
   options.level0_slowdown_writes_trigger = 1 << 10;
   options.min_write_buffer_number_to_merge = 1;
-  options.max_write_buffer_number_to_maintain = 1;
+  options.max_write_buffer_size_to_maintain =
+      static_cast<int64_t>(options.write_buffer_size);
   options.max_write_buffer_number = 2;
   options.write_buffer_size = 120 * 1024;
   CreateAndReopenWithCF({"pikachu"}, options);
@@ -942,13 +943,13 @@ TEST_F(DBTest, FlushSchedule) {
 namespace {
 class KeepFilter : public CompactionFilter {
  public:
-  virtual bool Filter(int /*level*/, const Slice& /*key*/,
-                      const Slice& /*value*/, std::string* /*new_value*/,
-                      bool* /*value_changed*/) const override {
+  bool Filter(int /*level*/, const Slice& /*key*/, const Slice& /*value*/,
+              std::string* /*new_value*/,
+              bool* /*value_changed*/) const override {
     return false;
   }
 
-  virtual const char* Name() const override { return "KeepFilter"; }
+  const char* Name() const override { return "KeepFilter"; }
 };
 
 class KeepFilterFactory : public CompactionFilterFactory {
@@ -956,7 +957,7 @@ class KeepFilterFactory : public CompactionFilterFactory {
   explicit KeepFilterFactory(bool check_context = false)
       : check_context_(check_context) {}
 
-  virtual std::unique_ptr<CompactionFilter> CreateCompactionFilter(
+  std::unique_ptr<CompactionFilter> CreateCompactionFilter(
       const CompactionFilter::Context& context) override {
     if (check_context_) {
       EXPECT_EQ(expect_full_compaction_.load(), context.is_full_compaction);
@@ -965,7 +966,7 @@ class KeepFilterFactory : public CompactionFilterFactory {
     return std::unique_ptr<CompactionFilter>(new KeepFilter());
   }
 
-  virtual const char* Name() const override { return "KeepFilterFactory"; }
+  const char* Name() const override { return "KeepFilterFactory"; }
   bool check_context_;
   std::atomic_bool expect_full_compaction_;
   std::atomic_bool expect_manual_compaction_;
@@ -974,14 +975,14 @@ class KeepFilterFactory : public CompactionFilterFactory {
 class DelayFilter : public CompactionFilter {
  public:
   explicit DelayFilter(DBTestBase* d) : db_test(d) {}
-  virtual bool Filter(int /*level*/, const Slice& /*key*/,
-                      const Slice& /*value*/, std::string* /*new_value*/,
-                      bool* /*value_changed*/) const override {
+  bool Filter(int /*level*/, const Slice& /*key*/, const Slice& /*value*/,
+              std::string* /*new_value*/,
+              bool* /*value_changed*/) const override {
     db_test->env_->addon_time_.fetch_add(1000);
     return true;
   }
 
-  virtual const char* Name() const override { return "DelayFilter"; }
+  const char* Name() const override { return "DelayFilter"; }
 
  private:
   DBTestBase* db_test;
@@ -990,12 +991,12 @@ class DelayFilter : public CompactionFilter {
 class DelayFilterFactory : public CompactionFilterFactory {
  public:
   explicit DelayFilterFactory(DBTestBase* d) : db_test(d) {}
-  virtual std::unique_ptr<CompactionFilter> CreateCompactionFilter(
+  std::unique_ptr<CompactionFilter> CreateCompactionFilter(
       const CompactionFilter::Context& /*context*/) override {
     return std::unique_ptr<CompactionFilter>(new DelayFilter(db_test));
   }
 
-  virtual const char* Name() const override { return "DelayFilterFactory"; }
+  const char* Name() const override { return "DelayFilterFactory"; }
 
  private:
   DBTestBase* db_test;
@@ -1021,39 +1022,149 @@ TEST_F(DBTest, FailMoreDbPaths) {
   ASSERT_TRUE(TryReopen(options).IsNotSupported());
 }
 
-void CheckColumnFamilyMeta(const ColumnFamilyMetaData& cf_meta) {
+void CheckColumnFamilyMeta(
+    const ColumnFamilyMetaData& cf_meta,
+    const std::vector<std::vector<FileMetaData>>& files_by_level,
+    uint64_t start_time, uint64_t end_time) {
+  ASSERT_EQ(cf_meta.name, kDefaultColumnFamilyName);
+  ASSERT_EQ(cf_meta.levels.size(), files_by_level.size());
+
   uint64_t cf_size = 0;
-  uint64_t cf_csize = 0;
   size_t file_count = 0;
-  for (auto level_meta : cf_meta.levels) {
+
+  for (size_t i = 0; i < cf_meta.levels.size(); ++i) {
+    const auto& level_meta_from_cf = cf_meta.levels[i];
+    const auto& level_meta_from_files = files_by_level[i];
+
+    ASSERT_EQ(level_meta_from_cf.level, i);
+    ASSERT_EQ(level_meta_from_cf.files.size(), level_meta_from_files.size());
+
+    file_count += level_meta_from_cf.files.size();
+
     uint64_t level_size = 0;
-    uint64_t level_csize = 0;
-    file_count += level_meta.files.size();
-    for (auto file_meta : level_meta.files) {
-      level_size += file_meta.size;
+    for (size_t j = 0; j < level_meta_from_cf.files.size(); ++j) {
+      const auto& file_meta_from_cf = level_meta_from_cf.files[j];
+      const auto& file_meta_from_files = level_meta_from_files[j];
+
+      level_size += file_meta_from_cf.size;
+
+      ASSERT_EQ(file_meta_from_cf.file_number,
+                file_meta_from_files.fd.GetNumber());
+      ASSERT_EQ(file_meta_from_cf.file_number,
+                TableFileNameToNumber(file_meta_from_cf.name));
+      ASSERT_EQ(file_meta_from_cf.size, file_meta_from_files.fd.file_size);
+      ASSERT_EQ(file_meta_from_cf.smallest_seqno,
+                file_meta_from_files.fd.smallest_seqno);
+      ASSERT_EQ(file_meta_from_cf.largest_seqno,
+                file_meta_from_files.fd.largest_seqno);
+      ASSERT_EQ(file_meta_from_cf.smallestkey,
+                file_meta_from_files.smallest.user_key().ToString());
+      ASSERT_EQ(file_meta_from_cf.largestkey,
+                file_meta_from_files.largest.user_key().ToString());
+      ASSERT_EQ(file_meta_from_cf.oldest_blob_file_number,
+                file_meta_from_files.oldest_blob_file_number);
+      ASSERT_EQ(file_meta_from_cf.oldest_ancester_time,
+                file_meta_from_files.oldest_ancester_time);
+      ASSERT_EQ(file_meta_from_cf.file_creation_time,
+                file_meta_from_files.file_creation_time);
+      ASSERT_GE(file_meta_from_cf.file_creation_time, start_time);
+      ASSERT_LE(file_meta_from_cf.file_creation_time, end_time);
+      ASSERT_GE(file_meta_from_cf.oldest_ancester_time, start_time);
+      ASSERT_LE(file_meta_from_cf.oldest_ancester_time, end_time);
     }
-    ASSERT_EQ(level_meta.size, level_size);
+
+    ASSERT_EQ(level_meta_from_cf.size, level_size);
     cf_size += level_size;
-    cf_csize += level_csize;
   }
+
   ASSERT_EQ(cf_meta.file_count, file_count);
   ASSERT_EQ(cf_meta.size, cf_size);
 }
 
+void CheckLiveFilesMeta(
+    const std::vector<LiveFileMetaData>& live_file_meta,
+    const std::vector<std::vector<FileMetaData>>& files_by_level) {
+  size_t total_file_count = 0;
+  for (const auto& f : files_by_level) {
+    total_file_count += f.size();
+  }
+
+  ASSERT_EQ(live_file_meta.size(), total_file_count);
+
+  int level = 0;
+  int i = 0;
+
+  for (const auto& meta : live_file_meta) {
+    if (level != meta.level) {
+      level = meta.level;
+      i = 0;
+    }
+
+    ASSERT_LT(i, files_by_level[level].size());
+
+    const auto& expected_meta = files_by_level[level][i];
+
+    ASSERT_EQ(meta.column_family_name, kDefaultColumnFamilyName);
+    ASSERT_EQ(meta.file_number, expected_meta.fd.GetNumber());
+    ASSERT_EQ(meta.file_number, TableFileNameToNumber(meta.name));
+    ASSERT_EQ(meta.size, expected_meta.fd.file_size);
+    ASSERT_EQ(meta.smallest_seqno, expected_meta.fd.smallest_seqno);
+    ASSERT_EQ(meta.largest_seqno, expected_meta.fd.largest_seqno);
+    ASSERT_EQ(meta.smallestkey, expected_meta.smallest.user_key().ToString());
+    ASSERT_EQ(meta.largestkey, expected_meta.largest.user_key().ToString());
+    ASSERT_EQ(meta.oldest_blob_file_number,
+              expected_meta.oldest_blob_file_number);
+
+    ++i;
+  }
+}
+
 #ifndef ROCKSDB_LITE
-TEST_F(DBTest, ColumnFamilyMetaDataTest) {
+TEST_F(DBTest, MetaDataTest) {
   Options options = CurrentOptions();
   options.create_if_missing = true;
+  options.disable_auto_compactions = true;
+
+  int64_t temp_time = 0;
+  options.env->GetCurrentTime(&temp_time);
+  uint64_t start_time = static_cast<uint64_t>(temp_time);
+
   DestroyAndReopen(options);
 
   Random rnd(301);
   int key_index = 0;
-  ColumnFamilyMetaData cf_meta;
   for (int i = 0; i < 100; ++i) {
-    GenerateNewFile(&rnd, &key_index);
-    db_->GetColumnFamilyMetaData(&cf_meta);
-    CheckColumnFamilyMeta(cf_meta);
+    // Add a single blob reference to each file
+    std::string blob_index;
+    BlobIndex::EncodeBlob(&blob_index, /* blob_file_number */ i + 1000,
+                          /* offset */ 1234, /* size */ 5678, kNoCompression);
+
+    WriteBatch batch;
+    ASSERT_OK(WriteBatchInternal::PutBlobIndex(&batch, 0, Key(key_index),
+                                               blob_index));
+    ASSERT_OK(dbfull()->Write(WriteOptions(), &batch));
+
+    ++key_index;
+
+    // Fill up the rest of the file with random values.
+    GenerateNewFile(&rnd, &key_index, /* nowait */ true);
+
+    Flush();
   }
+
+  std::vector<std::vector<FileMetaData>> files_by_level;
+  dbfull()->TEST_GetFilesMetaData(db_->DefaultColumnFamily(), &files_by_level);
+
+  options.env->GetCurrentTime(&temp_time);
+  uint64_t end_time = static_cast<uint64_t>(temp_time);
+
+  ColumnFamilyMetaData cf_meta;
+  db_->GetColumnFamilyMetaData(&cf_meta);
+  CheckColumnFamilyMeta(cf_meta, files_by_level, start_time, end_time);
+
+  std::vector<LiveFileMetaData> live_file_meta;
+  db_->GetLiveFilesMetaData(&live_file_meta);
+  CheckLiveFilesMeta(live_file_meta, files_by_level);
 }
 
 namespace {
@@ -1259,6 +1370,7 @@ TEST_F(DBTest, ApproximateSizesMemTable) {
   options.compression = kNoCompression;
   options.create_if_missing = true;
   DestroyAndReopen(options);
+  auto default_cf = db_->DefaultColumnFamily();
 
   const int N = 128;
   Random rnd(301);
@@ -1270,9 +1382,10 @@ TEST_F(DBTest, ApproximateSizesMemTable) {
   std::string start = Key(50);
   std::string end = Key(60);
   Range r(start, end);
-  uint8_t include_both = DB::SizeApproximationFlags::INCLUDE_FILES |
-                         DB::SizeApproximationFlags::INCLUDE_MEMTABLES;
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  SizeApproximationOptions size_approx_options;
+  size_approx_options.include_memtabtles = true;
+  size_approx_options.include_files = true;
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_GT(size, 6000);
   ASSERT_LT(size, 204800);
   // Zero if not including mem table
@@ -1282,7 +1395,7 @@ TEST_F(DBTest, ApproximateSizesMemTable) {
   start = Key(500);
   end = Key(600);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_EQ(size, 0);
 
   for (int i = 0; i < N; i++) {
@@ -1292,19 +1405,20 @@ TEST_F(DBTest, ApproximateSizesMemTable) {
   start = Key(500);
   end = Key(600);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_EQ(size, 0);
 
   start = Key(100);
   end = Key(1020);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_GT(size, 6000);
 
   options.max_write_buffer_number = 8;
   options.min_write_buffer_number_to_merge = 5;
   options.write_buffer_size = 1024 * N;  // Not very large
   DestroyAndReopen(options);
+  default_cf = db_->DefaultColumnFamily();
 
   int keys[N * 3];
   for (int i = 0; i < N; i++) {
@@ -1321,26 +1435,27 @@ TEST_F(DBTest, ApproximateSizesMemTable) {
   start = Key(100);
   end = Key(300);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_EQ(size, 0);
 
   start = Key(1050);
   end = Key(1080);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_GT(size, 6000);
 
   start = Key(2100);
   end = Key(2300);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
   ASSERT_EQ(size, 0);
 
   start = Key(1050);
   end = Key(1080);
   r = Range(start, end);
   uint64_t size_with_mt, size_without_mt;
-  db_->GetApproximateSizes(&r, 1, &size_with_mt, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1,
+                           &size_with_mt);
   ASSERT_GT(size_with_mt, 6000);
   db_->GetApproximateSizes(&r, 1, &size_without_mt);
   ASSERT_EQ(size_without_mt, 0);
@@ -1354,10 +1469,80 @@ TEST_F(DBTest, ApproximateSizesMemTable) {
   start = Key(1050);
   end = Key(1080);
   r = Range(start, end);
-  db_->GetApproximateSizes(&r, 1, &size_with_mt, include_both);
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1,
+                           &size_with_mt);
   db_->GetApproximateSizes(&r, 1, &size_without_mt);
   ASSERT_GT(size_with_mt, size_without_mt);
   ASSERT_GT(size_without_mt, 6000);
+
+  // Check that include_memtabtles flag works as expected
+  size_approx_options.include_memtabtles = false;
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
+  ASSERT_EQ(size, size_without_mt);
+
+  // Check that files_size_error_margin works as expected, when the heuristic
+  // conditions are not met
+  start = Key(1);
+  end = Key(1000 + N - 2);
+  r = Range(start, end);
+  size_approx_options.files_size_error_margin = -1.0;  // disabled
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
+  uint64_t size2;
+  size_approx_options.files_size_error_margin = 0.5;  // enabled, but not used
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size2);
+  ASSERT_EQ(size, size2);
+}
+
+TEST_F(DBTest, ApproximateSizesFilesWithErrorMargin) {
+  Options options = CurrentOptions();
+  options.write_buffer_size = 1024 * 1024;
+  options.compression = kNoCompression;
+  options.create_if_missing = true;
+  options.target_file_size_base = 1024 * 1024;
+  DestroyAndReopen(options);
+  const auto default_cf = db_->DefaultColumnFamily();
+
+  const int N = 64000;
+  Random rnd(301);
+  for (int i = 0; i < N; i++) {
+    ASSERT_OK(Put(Key(i), RandomString(&rnd, 1024)));
+  }
+  // Flush everything to files
+  Flush();
+  // Compact the entire key space into the next level
+  db_->CompactRange(CompactRangeOptions(), default_cf, nullptr, nullptr);
+
+  // Write more keys
+  for (int i = N; i < (N + N / 4); i++) {
+    ASSERT_OK(Put(Key(i), RandomString(&rnd, 1024)));
+  }
+  // Flush everything to files again
+  Flush();
+
+  // Wait for compaction to finish
+  ASSERT_OK(dbfull()->TEST_WaitForCompact());
+
+  const std::string start = Key(0);
+  const std::string end = Key(2 * N);
+  const Range r(start, end);
+
+  SizeApproximationOptions size_approx_options;
+  size_approx_options.include_memtabtles = false;
+  size_approx_options.include_files = true;
+  size_approx_options.files_size_error_margin = -1.0;  // disabled
+
+  // Get the precise size without any approximation heuristic
+  uint64_t size;
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size);
+  ASSERT_NE(size, 0);
+
+  // Get the size with an approximation heuristic
+  uint64_t size2;
+  const double error_margin = 0.2;
+  size_approx_options.files_size_error_margin = error_margin;
+  db_->GetApproximateSizes(size_approx_options, default_cf, &r, 1, &size2);
+  ASSERT_LT(size2, size * (1 + error_margin));
+  ASSERT_GT(size2, size * (1 - error_margin));
 }
 
 TEST_F(DBTest, GetApproximateMemTableStats) {
@@ -1571,7 +1756,7 @@ TEST_F(DBTest, Snapshot) {
     ASSERT_EQ(0U, GetNumSnapshots());
     ASSERT_EQ("0v4", Get(0, "foo"));
     ASSERT_EQ("1v4", Get(1, "foo"));
-  } while (ChangeOptions(kSkipHashCuckoo));
+  } while (ChangeOptions());
 }
 
 TEST_F(DBTest, HiddenValuesAreRemoved) {
@@ -1608,9 +1793,8 @@ TEST_F(DBTest, HiddenValuesAreRemoved) {
     ASSERT_TRUE(Between(Size("", "pastfoo", 1), 0, 1000));
     // ApproximateOffsetOf() is not yet implemented in plain table format,
     // which is used by Size().
-    // skip HashCuckooRep as it does not support snapshot
   } while (ChangeOptions(kSkipUniversalCompaction | kSkipFIFOCompaction |
-                         kSkipPlainTable | kSkipHashCuckoo));
+                         kSkipPlainTable));
 }
 #endif  // ROCKSDB_LITE
 
@@ -1656,11 +1840,11 @@ TEST_F(DBTest, UnremovableSingleDelete) {
     ASSERT_EQ("first", Get(1, "foo", snapshot));
     ASSERT_EQ("NOT_FOUND", Get(1, "foo"));
     db_->ReleaseSnapshot(snapshot);
-    // Skip HashCuckooRep as it does not support single delete.  FIFO and
-    // universal compaction do not apply to the test case.  Skip MergePut
-    // because single delete does not get removed when it encounters a merge.
-  } while (ChangeOptions(kSkipHashCuckoo | kSkipFIFOCompaction |
-                         kSkipUniversalCompaction | kSkipMergePut));
+    // Skip FIFO and universal compaction beccause they do not apply to the test
+    // case. Skip MergePut because single delete does not get removed when it
+    // encounters a merge.
+  } while (ChangeOptions(kSkipFIFOCompaction | kSkipUniversalCompaction |
+                         kSkipMergePut));
 }
 
 #ifndef ROCKSDB_LITE
@@ -1778,17 +1962,14 @@ TEST_F(DBTest, OverlapInLevel0) {
 TEST_F(DBTest, ComparatorCheck) {
   class NewComparator : public Comparator {
    public:
-    virtual const char* Name() const override {
-      return "rocksdb.NewComparator";
-    }
-    virtual int Compare(const Slice& a, const Slice& b) const override {
+    const char* Name() const override { return "rocksdb.NewComparator"; }
+    int Compare(const Slice& a, const Slice& b) const override {
       return BytewiseComparator()->Compare(a, b);
     }
-    virtual void FindShortestSeparator(std::string* s,
-                                       const Slice& l) const override {
+    void FindShortestSeparator(std::string* s, const Slice& l) const override {
       BytewiseComparator()->FindShortestSeparator(s, l);
     }
-    virtual void FindShortSuccessor(std::string* key) const override {
+    void FindShortSuccessor(std::string* key) const override {
       BytewiseComparator()->FindShortSuccessor(key);
     }
   };
@@ -1811,18 +1992,15 @@ TEST_F(DBTest, ComparatorCheck) {
 TEST_F(DBTest, CustomComparator) {
   class NumberComparator : public Comparator {
    public:
-    virtual const char* Name() const override {
-      return "test.NumberComparator";
-    }
-    virtual int Compare(const Slice& a, const Slice& b) const override {
+    const char* Name() const override { return "test.NumberComparator"; }
+    int Compare(const Slice& a, const Slice& b) const override {
       return ToNumber(a) - ToNumber(b);
     }
-    virtual void FindShortestSeparator(std::string* s,
-                                       const Slice& l) const override {
+    void FindShortestSeparator(std::string* s, const Slice& l) const override {
       ToNumber(*s);  // Check format
       ToNumber(l);   // Check format
     }
-    virtual void FindShortSuccessor(std::string* key) const override {
+    void FindShortSuccessor(std::string* key) const override {
       ToNumber(*key);  // Check format
     }
 
@@ -2162,6 +2340,7 @@ struct MTState {
 struct MTThread {
   MTState* state;
   int id;
+  bool multiget_batched;
 };
 
 static void MTThreadBody(void* arg) {
@@ -2210,8 +2389,28 @@ static void MTThreadBody(void* arg) {
       // same)
       std::vector<Slice> keys(kColumnFamilies, Slice(keybuf));
       std::vector<std::string> values;
-      std::vector<Status> statuses =
-          db->MultiGet(ReadOptions(), t->state->test->handles_, keys, &values);
+      std::vector<Status> statuses;
+      if (!t->multiget_batched) {
+        statuses = db->MultiGet(ReadOptions(), t->state->test->handles_, keys,
+                                &values);
+      } else {
+        std::vector<PinnableSlice> pin_values(keys.size());
+        statuses.resize(keys.size());
+        const Snapshot* snapshot = db->GetSnapshot();
+        ReadOptions ro;
+        ro.snapshot = snapshot;
+        for (int cf = 0; cf < kColumnFamilies; ++cf) {
+          db->MultiGet(ro, t->state->test->handles_[cf], 1, &keys[cf],
+                       &pin_values[cf], &statuses[cf]);
+        }
+        db->ReleaseSnapshot(snapshot);
+        values.resize(keys.size());
+        for (int cf = 0; cf < kColumnFamilies; ++cf) {
+          if (statuses[cf].ok()) {
+            values[cf].assign(pin_values[cf].data(), pin_values[cf].size());
+          }
+        }
+      }
       Status s = statuses[0];
       // all statuses have to be the same
       for (size_t i = 1; i < statuses.size(); ++i) {
@@ -2253,24 +2452,27 @@ static void MTThreadBody(void* arg) {
 
 }  // namespace
 
-class MultiThreadedDBTest : public DBTest,
-                            public ::testing::WithParamInterface<int> {
+class MultiThreadedDBTest
+    : public DBTest,
+      public ::testing::WithParamInterface<std::tuple<int, bool>> {
  public:
-  virtual void SetUp() override { option_config_ = GetParam(); }
+  void SetUp() override {
+    std::tie(option_config_, multiget_batched_) = GetParam();
+  }
 
   static std::vector<int> GenerateOptionConfigs() {
     std::vector<int> optionConfigs;
     for (int optionConfig = kDefault; optionConfig < kEnd; ++optionConfig) {
-      // skip as HashCuckooRep does not support snapshot
-      if (optionConfig != kHashCuckoo) {
-        optionConfigs.push_back(optionConfig);
-      }
+      optionConfigs.push_back(optionConfig);
     }
     return optionConfigs;
   }
+
+  bool multiget_batched_;
 };
 
 TEST_P(MultiThreadedDBTest, MultiThreaded) {
+  if (option_config_ == kPipelinedWrite) return;
   anon::OptionsOverride options_override;
   options_override.skip_policy = kSkipNoSnapshot;
   Options options = CurrentOptions(options_override);
@@ -2294,6 +2496,7 @@ TEST_P(MultiThreadedDBTest, MultiThreaded) {
   for (int id = 0; id < kNumThreads; id++) {
     thread[id].state = &mt;
     thread[id].id = id;
+    thread[id].multiget_batched = multiget_batched_;
     env_->StartThread(MTThreadBody, &thread[id]);
   }
 
@@ -2311,7 +2514,9 @@ TEST_P(MultiThreadedDBTest, MultiThreaded) {
 
 INSTANTIATE_TEST_CASE_P(
     MultiThreaded, MultiThreadedDBTest,
-    ::testing::ValuesIn(MultiThreadedDBTest::GenerateOptionConfigs()));
+    ::testing::Combine(
+        ::testing::ValuesIn(MultiThreadedDBTest::GenerateOptionConfigs()),
+        ::testing::Bool()));
 #endif  // ROCKSDB_LITE
 
 // Group commit test:
@@ -2404,7 +2609,7 @@ class ModelDB : public DB {
    public:
     KVMap map_;
 
-    virtual SequenceNumber GetSequenceNumber() const override {
+    SequenceNumber GetSequenceNumber() const override {
       // no need to call this
       assert(false);
       return 0;
@@ -2413,43 +2618,52 @@ class ModelDB : public DB {
 
   explicit ModelDB(const Options& options) : options_(options) {}
   using DB::Put;
-  virtual Status Put(const WriteOptions& o, ColumnFamilyHandle* cf,
-                     const Slice& k, const Slice& v) override {
+  Status Put(const WriteOptions& o, ColumnFamilyHandle* cf, const Slice& k,
+             const Slice& v) override {
     WriteBatch batch;
     batch.Put(cf, k, v);
     return Write(o, &batch);
   }
   using DB::Close;
-  virtual Status Close() override { return Status::OK(); }
+  Status Close() override { return Status::OK(); }
   using DB::Delete;
-  virtual Status Delete(const WriteOptions& o, ColumnFamilyHandle* cf,
-                        const Slice& key) override {
+  Status Delete(const WriteOptions& o, ColumnFamilyHandle* cf,
+                const Slice& key) override {
     WriteBatch batch;
     batch.Delete(cf, key);
     return Write(o, &batch);
   }
   using DB::SingleDelete;
-  virtual Status SingleDelete(const WriteOptions& o, ColumnFamilyHandle* cf,
-                              const Slice& key) override {
+  Status SingleDelete(const WriteOptions& o, ColumnFamilyHandle* cf,
+                      const Slice& key) override {
     WriteBatch batch;
     batch.SingleDelete(cf, key);
     return Write(o, &batch);
   }
   using DB::Merge;
-  virtual Status Merge(const WriteOptions& o, ColumnFamilyHandle* cf,
-                       const Slice& k, const Slice& v) override {
+  Status Merge(const WriteOptions& o, ColumnFamilyHandle* cf, const Slice& k,
+               const Slice& v) override {
     WriteBatch batch;
     batch.Merge(cf, k, v);
     return Write(o, &batch);
   }
   using DB::Get;
-  virtual Status Get(const ReadOptions& /*options*/, ColumnFamilyHandle* /*cf*/,
-                     const Slice& key, PinnableSlice* /*value*/) override {
+  Status Get(const ReadOptions& /*options*/, ColumnFamilyHandle* /*cf*/,
+             const Slice& key, PinnableSlice* /*value*/) override {
+    return Status::NotSupported(key);
+  }
+
+  using DB::GetMergeOperands;
+  virtual Status GetMergeOperands(
+      const ReadOptions& /*options*/, ColumnFamilyHandle* /*column_family*/,
+      const Slice& key, PinnableSlice* /*slice*/,
+      GetMergeOperandsOptions* /*merge_operands_options*/,
+      int* /*number_of_operands*/) override {
     return Status::NotSupported(key);
   }
 
   using DB::MultiGet;
-  virtual std::vector<Status> MultiGet(
+  std::vector<Status> MultiGet(
       const ReadOptions& /*options*/,
       const std::vector<ColumnFamilyHandle*>& /*column_family*/,
       const std::vector<Slice>& keys,
@@ -2461,25 +2675,42 @@ class ModelDB : public DB {
 
 #ifndef ROCKSDB_LITE
   using DB::IngestExternalFile;
-  virtual Status IngestExternalFile(
+  Status IngestExternalFile(
       ColumnFamilyHandle* /*column_family*/,
       const std::vector<std::string>& /*external_files*/,
       const IngestExternalFileOptions& /*options*/) override {
     return Status::NotSupported("Not implemented.");
   }
 
-  virtual Status VerifyChecksum() override {
+  using DB::IngestExternalFiles;
+  Status IngestExternalFiles(
+      const std::vector<IngestExternalFileArg>& /*args*/) override {
+    return Status::NotSupported("Not implemented");
+  }
+
+  using DB::CreateColumnFamilyWithImport;
+  virtual Status CreateColumnFamilyWithImport(
+      const ColumnFamilyOptions& /*options*/,
+      const std::string& /*column_family_name*/,
+      const ImportColumnFamilyOptions& /*import_options*/,
+      const ExportImportFilesMetaData& /*metadata*/,
+      ColumnFamilyHandle** /*handle*/) override {
+    return Status::NotSupported("Not implemented.");
+  }
+
+  using DB::VerifyChecksum;
+  Status VerifyChecksum(const ReadOptions&) override {
     return Status::NotSupported("Not implemented.");
   }
 
   using DB::GetPropertiesOfAllTables;
-  virtual Status GetPropertiesOfAllTables(
+  Status GetPropertiesOfAllTables(
       ColumnFamilyHandle* /*column_family*/,
       TablePropertiesCollection* /*props*/) override {
     return Status();
   }
 
-  virtual Status GetPropertiesOfTablesInRange(
+  Status GetPropertiesOfTablesInRange(
       ColumnFamilyHandle* /*column_family*/, const Range* /*range*/,
       std::size_t /*n*/, TablePropertiesCollection* /*props*/) override {
     return Status();
@@ -2487,19 +2718,18 @@ class ModelDB : public DB {
 #endif  // ROCKSDB_LITE
 
   using DB::KeyMayExist;
-  virtual bool KeyMayExist(const ReadOptions& /*options*/,
-                           ColumnFamilyHandle* /*column_family*/,
-                           const Slice& /*key*/, std::string* /*value*/,
-                           bool* value_found = nullptr) override {
+  bool KeyMayExist(const ReadOptions& /*options*/,
+                   ColumnFamilyHandle* /*column_family*/, const Slice& /*key*/,
+                   std::string* /*value*/,
+                   bool* value_found = nullptr) override {
     if (value_found != nullptr) {
       *value_found = false;
     }
     return true;  // Not Supported directly
   }
   using DB::NewIterator;
-  virtual Iterator* NewIterator(
-      const ReadOptions& options,
-      ColumnFamilyHandle* /*column_family*/) override {
+  Iterator* NewIterator(const ReadOptions& options,
+                        ColumnFamilyHandle* /*column_family*/) override {
     if (options.snapshot == nullptr) {
       KVMap* saved = new KVMap;
       *saved = map_;
@@ -2510,38 +2740,33 @@ class ModelDB : public DB {
       return new ModelIter(snapshot_state, false);
     }
   }
-  virtual Status NewIterators(
-      const ReadOptions& /*options*/,
-      const std::vector<ColumnFamilyHandle*>& /*column_family*/,
-      std::vector<Iterator*>* /*iterators*/) override {
+  Status NewIterators(const ReadOptions& /*options*/,
+                      const std::vector<ColumnFamilyHandle*>& /*column_family*/,
+                      std::vector<Iterator*>* /*iterators*/) override {
     return Status::NotSupported("Not supported yet");
   }
-  virtual const Snapshot* GetSnapshot() override {
+  const Snapshot* GetSnapshot() override {
     ModelSnapshot* snapshot = new ModelSnapshot;
     snapshot->map_ = map_;
     return snapshot;
   }
 
-  virtual void ReleaseSnapshot(const Snapshot* snapshot) override {
+  void ReleaseSnapshot(const Snapshot* snapshot) override {
     delete reinterpret_cast<const ModelSnapshot*>(snapshot);
   }
 
-  virtual Status Write(const WriteOptions& /*options*/,
-                       WriteBatch* batch) override {
+  Status Write(const WriteOptions& /*options*/, WriteBatch* batch) override {
     class Handler : public WriteBatch::Handler {
      public:
       KVMap* map_;
-      virtual void Put(const Slice& key, const Slice& value) override {
+      void Put(const Slice& key, const Slice& value) override {
         (*map_)[key.ToString()] = value.ToString();
       }
-      virtual void Merge(const Slice& /*key*/,
-                         const Slice& /*value*/) override {
+      void Merge(const Slice& /*key*/, const Slice& /*value*/) override {
         // ignore merge for now
         // (*map_)[key.ToString()] = value.ToString();
       }
-      virtual void Delete(const Slice& key) override {
-        map_->erase(key.ToString());
-      }
+      void Delete(const Slice& key) override { map_->erase(key.ToString()); }
     };
     Handler handler;
     handler.map_ = &map_;
@@ -2549,67 +2774,65 @@ class ModelDB : public DB {
   }
 
   using DB::GetProperty;
-  virtual bool GetProperty(ColumnFamilyHandle* /*column_family*/,
-                           const Slice& /*property*/,
-                           std::string* /*value*/) override {
+  bool GetProperty(ColumnFamilyHandle* /*column_family*/,
+                   const Slice& /*property*/, std::string* /*value*/) override {
     return false;
   }
   using DB::GetIntProperty;
-  virtual bool GetIntProperty(ColumnFamilyHandle* /*column_family*/,
-                              const Slice& /*property*/,
-                              uint64_t* /*value*/) override {
+  bool GetIntProperty(ColumnFamilyHandle* /*column_family*/,
+                      const Slice& /*property*/, uint64_t* /*value*/) override {
     return false;
   }
   using DB::GetMapProperty;
-  virtual bool GetMapProperty(
-      ColumnFamilyHandle* /*column_family*/, const Slice& /*property*/,
-      std::map<std::string, std::string>* /*value*/) override {
+  bool GetMapProperty(ColumnFamilyHandle* /*column_family*/,
+                      const Slice& /*property*/,
+                      std::map<std::string, std::string>* /*value*/) override {
     return false;
   }
   using DB::GetAggregatedIntProperty;
-  virtual bool GetAggregatedIntProperty(const Slice& /*property*/,
-                                        uint64_t* /*value*/) override {
+  bool GetAggregatedIntProperty(const Slice& /*property*/,
+                                uint64_t* /*value*/) override {
     return false;
   }
   using DB::GetApproximateSizes;
-  virtual void GetApproximateSizes(ColumnFamilyHandle* /*column_family*/,
-                                   const Range* /*range*/, int n,
-                                   uint64_t* sizes,
-                                   uint8_t /*include_flags*/
-                                   = INCLUDE_FILES) override {
+  Status GetApproximateSizes(const SizeApproximationOptions& /*options*/,
+                             ColumnFamilyHandle* /*column_family*/,
+                             const Range* /*range*/, int n,
+                             uint64_t* sizes) override {
     for (int i = 0; i < n; i++) {
       sizes[i] = 0;
     }
+    return Status::OK();
   }
   using DB::GetApproximateMemTableStats;
-  virtual void GetApproximateMemTableStats(
-      ColumnFamilyHandle* /*column_family*/, const Range& /*range*/,
-      uint64_t* const count, uint64_t* const size) override {
+  void GetApproximateMemTableStats(ColumnFamilyHandle* /*column_family*/,
+                                   const Range& /*range*/,
+                                   uint64_t* const count,
+                                   uint64_t* const size) override {
     *count = 0;
     *size = 0;
   }
   using DB::CompactRange;
-  virtual Status CompactRange(const CompactRangeOptions& /*options*/,
-                              ColumnFamilyHandle* /*column_family*/,
-                              const Slice* /*start*/,
-                              const Slice* /*end*/) override {
+  Status CompactRange(const CompactRangeOptions& /*options*/,
+                      ColumnFamilyHandle* /*column_family*/,
+                      const Slice* /*start*/, const Slice* /*end*/) override {
     return Status::NotSupported("Not supported operation.");
   }
 
-  virtual Status SetDBOptions(
+  Status SetDBOptions(
       const std::unordered_map<std::string, std::string>& /*new_options*/)
       override {
     return Status::NotSupported("Not supported operation.");
   }
 
   using DB::CompactFiles;
-  virtual Status CompactFiles(
+  Status CompactFiles(
       const CompactionOptions& /*compact_options*/,
       ColumnFamilyHandle* /*column_family*/,
       const std::vector<std::string>& /*input_file_names*/,
       const int /*output_level*/, const int /*output_path_id*/ = -1,
-      std::vector<std::string>* const /*output_file_names*/ = nullptr
-      ) override {
+      std::vector<std::string>* const /*output_file_names*/ = nullptr,
+      CompactionJobInfo* /*compaction_job_info*/ = nullptr) override {
     return Status::NotSupported("Not supported operation.");
   }
 
@@ -2627,70 +2850,75 @@ class ModelDB : public DB {
     return Status::NotSupported("Not supported operation.");
   }
 
+  void EnableManualCompaction() override { return; }
+
+  void DisableManualCompaction() override { return; }
+
   using DB::NumberLevels;
-  virtual int NumberLevels(ColumnFamilyHandle* /*column_family*/) override {
-    return 1;
-  }
+  int NumberLevels(ColumnFamilyHandle* /*column_family*/) override { return 1; }
 
   using DB::MaxMemCompactionLevel;
-  virtual int MaxMemCompactionLevel(
-      ColumnFamilyHandle* /*column_family*/) override {
+  int MaxMemCompactionLevel(ColumnFamilyHandle* /*column_family*/) override {
     return 1;
   }
 
   using DB::Level0StopWriteTrigger;
-  virtual int Level0StopWriteTrigger(
-      ColumnFamilyHandle* /*column_family*/) override {
+  int Level0StopWriteTrigger(ColumnFamilyHandle* /*column_family*/) override {
     return -1;
   }
 
-  virtual const std::string& GetName() const override { return name_; }
+  const std::string& GetName() const override { return name_; }
 
-  virtual Env* GetEnv() const override { return nullptr; }
+  Env* GetEnv() const override { return nullptr; }
 
   using DB::GetOptions;
-  virtual Options GetOptions(
-      ColumnFamilyHandle* /*column_family*/) const override {
+  Options GetOptions(ColumnFamilyHandle* /*column_family*/) const override {
     return options_;
   }
 
   using DB::GetDBOptions;
-  virtual DBOptions GetDBOptions() const override { return options_; }
+  DBOptions GetDBOptions() const override { return options_; }
 
   using DB::Flush;
-  virtual Status Flush(const rocksdb::FlushOptions& /*options*/,
-                       ColumnFamilyHandle* /*column_family*/) override {
+  Status Flush(const rocksdb::FlushOptions& /*options*/,
+               ColumnFamilyHandle* /*column_family*/) override {
     Status ret;
     return ret;
   }
-  virtual Status Flush(
+  Status Flush(
       const rocksdb::FlushOptions& /*options*/,
       const std::vector<ColumnFamilyHandle*>& /*column_families*/) override {
     return Status::OK();
   }
 
-  virtual Status SyncWAL() override { return Status::OK(); }
+  Status SyncWAL() override { return Status::OK(); }
 
 #ifndef ROCKSDB_LITE
-  virtual Status DisableFileDeletions() override { return Status::OK(); }
+  Status DisableFileDeletions() override { return Status::OK(); }
 
-  virtual Status EnableFileDeletions(bool /*force*/) override {
-    return Status::OK();
-  }
-  virtual Status GetLiveFiles(std::vector<std::string>&, uint64_t* /*size*/,
-                              bool /*flush_memtable*/ = true) override {
-    return Status::OK();
-  }
-
-  virtual Status GetSortedWalFiles(VectorLogPtr& /*files*/) override {
+  Status EnableFileDeletions(bool /*force*/) override { return Status::OK(); }
+  Status GetLiveFiles(std::vector<std::string>&, uint64_t* /*size*/,
+                      bool /*flush_memtable*/ = true) override {
     return Status::OK();
   }
 
-  virtual Status DeleteFile(std::string /*name*/) override {
+  Status GetSortedWalFiles(VectorLogPtr& /*files*/) override {
     return Status::OK();
   }
 
-  virtual Status GetUpdatesSince(
+  Status GetCurrentWalFile(
+      std::unique_ptr<LogFile>* /*current_log_file*/) override {
+    return Status::OK();
+  }
+
+  virtual Status GetCreationTimeOfOldestFile(
+      uint64_t* /*creation_time*/) override {
+    return Status::NotSupported();
+  }
+
+  Status DeleteFile(std::string /*name*/) override { return Status::OK(); }
+
+  Status GetUpdatesSince(
       rocksdb::SequenceNumber,
       std::unique_ptr<rocksdb::TransactionLogIterator>*,
       const TransactionLogIterator::ReadOptions& /*read_options*/ =
@@ -2698,52 +2926,48 @@ class ModelDB : public DB {
     return Status::NotSupported("Not supported in Model DB");
   }
 
-  virtual void GetColumnFamilyMetaData(
-      ColumnFamilyHandle* /*column_family*/,
-      ColumnFamilyMetaData* /*metadata*/) override {}
+  void GetColumnFamilyMetaData(ColumnFamilyHandle* /*column_family*/,
+                               ColumnFamilyMetaData* /*metadata*/) override {}
 #endif  // ROCKSDB_LITE
 
-  virtual Status GetDbIdentity(std::string& /*identity*/) const override {
+  Status GetDbIdentity(std::string& /*identity*/) const override {
     return Status::OK();
   }
 
-  virtual SequenceNumber GetLatestSequenceNumber() const override { return 0; }
+  SequenceNumber GetLatestSequenceNumber() const override { return 0; }
 
-  virtual bool SetPreserveDeletesSequenceNumber(
-      SequenceNumber /*seqnum*/) override {
+  bool SetPreserveDeletesSequenceNumber(SequenceNumber /*seqnum*/) override {
     return true;
   }
 
-  virtual ColumnFamilyHandle* DefaultColumnFamily() const override {
-    return nullptr;
-  }
+  ColumnFamilyHandle* DefaultColumnFamily() const override { return nullptr; }
 
  private:
   class ModelIter : public Iterator {
    public:
     ModelIter(const KVMap* map, bool owned)
         : map_(map), owned_(owned), iter_(map_->end()) {}
-    ~ModelIter() {
+    ~ModelIter() override {
       if (owned_) delete map_;
     }
-    virtual bool Valid() const override { return iter_ != map_->end(); }
-    virtual void SeekToFirst() override { iter_ = map_->begin(); }
-    virtual void SeekToLast() override {
+    bool Valid() const override { return iter_ != map_->end(); }
+    void SeekToFirst() override { iter_ = map_->begin(); }
+    void SeekToLast() override {
       if (map_->empty()) {
         iter_ = map_->end();
       } else {
         iter_ = map_->find(map_->rbegin()->first);
       }
     }
-    virtual void Seek(const Slice& k) override {
+    void Seek(const Slice& k) override {
       iter_ = map_->lower_bound(k.ToString());
     }
-    virtual void SeekForPrev(const Slice& k) override {
+    void SeekForPrev(const Slice& k) override {
       iter_ = map_->upper_bound(k.ToString());
       Prev();
     }
-    virtual void Next() override { ++iter_; }
-    virtual void Prev() override {
+    void Next() override { ++iter_; }
+    void Prev() override {
       if (iter_ == map_->begin()) {
         iter_ = map_->end();
         return;
@@ -2751,9 +2975,9 @@ class ModelDB : public DB {
       --iter_;
     }
 
-    virtual Slice key() const override { return iter_->first; }
-    virtual Slice value() const override { return iter_->second; }
-    virtual Status status() const override { return Status::OK(); }
+    Slice key() const override { return iter_->first; }
+    Slice value() const override { return iter_->second; }
+    Status status() const override { return Status::OK(); }
 
    private:
     const KVMap* const map_;
@@ -2821,15 +3045,14 @@ static bool CompareIterators(int step, DB* model, DB* db,
 class DBTestRandomized : public DBTest,
                          public ::testing::WithParamInterface<int> {
  public:
-  virtual void SetUp() override { option_config_ = GetParam(); }
+  void SetUp() override { option_config_ = GetParam(); }
 
   static std::vector<int> GenerateOptionConfigs() {
     std::vector<int> option_configs;
     // skip cuckoo hash as it does not support snapshot.
     for (int option_config = kDefault; option_config < kEnd; ++option_config) {
-      if (!ShouldSkipOptions(option_config, kSkipDeletesFilterFirst |
-                                                kSkipNoSeekToLast |
-                                                kSkipHashCuckoo)) {
+      if (!ShouldSkipOptions(option_config,
+                             kSkipDeletesFilterFirst | kSkipNoSeekToLast)) {
         option_configs.push_back(option_config);
       }
     }
@@ -2859,7 +3082,6 @@ TEST_P(DBTestRandomized, Randomized) {
     int p = rnd.Uniform(100);
     int minimum = 0;
     if (option_config_ == kHashSkipList || option_config_ == kHashLinkList ||
-        option_config_ == kHashCuckoo ||
         option_config_ == kPlainTableFirstBytePrefix ||
         option_config_ == kBlockBasedTableWithWholeKeyHashIndex ||
         option_config_ == kBlockBasedTableWithPrefixHashIndex) {
@@ -3113,12 +3335,12 @@ TEST_F(DBTest, FIFOCompactionWithTTLAndMaxOpenFilesTest) {
   Options options;
   options.compaction_style = kCompactionStyleFIFO;
   options.create_if_missing = true;
-  options.compaction_options_fifo.ttl = 600;  // seconds
+  options.ttl = 600;  // seconds
 
-  // Check that it is not supported with max_open_files != -1.
+  // TTL is now supported with max_open_files != -1.
   options.max_open_files = 100;
   options = CurrentOptions(options);
-  ASSERT_TRUE(TryReopen(options).IsNotSupported());
+  ASSERT_OK(TryReopen(options));
 
   options.max_open_files = -1;
   ASSERT_OK(TryReopen(options));
@@ -3129,7 +3351,7 @@ TEST_F(DBTest, FIFOCompactionWithTTLAndVariousTableFormatsTest) {
   Options options;
   options.compaction_style = kCompactionStyleFIFO;
   options.create_if_missing = true;
-  options.compaction_options_fifo.ttl = 600;  // seconds
+  options.ttl = 600;  // seconds
 
   options = CurrentOptions(options);
   options.table_factory.reset(NewBlockBasedTableFactory());
@@ -3137,10 +3359,6 @@ TEST_F(DBTest, FIFOCompactionWithTTLAndVariousTableFormatsTest) {
 
   Destroy(options);
   options.table_factory.reset(NewPlainTableFactory());
-  ASSERT_TRUE(TryReopen(options).IsNotSupported());
-
-  Destroy(options);
-  options.table_factory.reset(NewCuckooTableFactory());
   ASSERT_TRUE(TryReopen(options).IsNotSupported());
 
   Destroy(options);
@@ -3164,7 +3382,7 @@ TEST_F(DBTest, FIFOCompactionWithTTLTest) {
     env_->addon_time_.store(0);
     options.compaction_options_fifo.max_table_files_size = 150 << 10;  // 150KB
     options.compaction_options_fifo.allow_compaction = false;
-    options.compaction_options_fifo.ttl = 1 * 60 * 60 ;  // 1 hour
+    options.ttl = 1 * 60 * 60 ;  // 1 hour
     options = CurrentOptions(options);
     DestroyAndReopen(options);
 
@@ -3199,7 +3417,7 @@ TEST_F(DBTest, FIFOCompactionWithTTLTest) {
   {
     options.compaction_options_fifo.max_table_files_size = 150 << 10;  // 150KB
     options.compaction_options_fifo.allow_compaction = false;
-    options.compaction_options_fifo.ttl = 1 * 60 * 60;  // 1 hour
+    options.ttl = 1 * 60 * 60;  // 1 hour
     options = CurrentOptions(options);
     DestroyAndReopen(options);
 
@@ -3241,7 +3459,7 @@ TEST_F(DBTest, FIFOCompactionWithTTLTest) {
     options.write_buffer_size = 10 << 10;                              // 10KB
     options.compaction_options_fifo.max_table_files_size = 150 << 10;  // 150KB
     options.compaction_options_fifo.allow_compaction = false;
-    options.compaction_options_fifo.ttl =  1 * 60 * 60;  // 1 hour
+    options.ttl =  1 * 60 * 60;  // 1 hour
     options = CurrentOptions(options);
     DestroyAndReopen(options);
 
@@ -3278,7 +3496,7 @@ TEST_F(DBTest, FIFOCompactionWithTTLTest) {
   {
     options.compaction_options_fifo.max_table_files_size = 150 << 10;  // 150KB
     options.compaction_options_fifo.allow_compaction = true;
-    options.compaction_options_fifo.ttl = 1 * 60 * 60;  // 1 hour
+    options.ttl = 1 * 60 * 60;  // 1 hour
     options.level0_file_num_compaction_trigger = 6;
     options = CurrentOptions(options);
     DestroyAndReopen(options);
@@ -3322,7 +3540,7 @@ TEST_F(DBTest, FIFOCompactionWithTTLTest) {
     options.write_buffer_size = 20 << 10;                               // 20K
     options.compaction_options_fifo.max_table_files_size = 1500 << 10;  // 1.5MB
     options.compaction_options_fifo.allow_compaction = true;
-    options.compaction_options_fifo.ttl = 1 * 60 * 60;  // 1 hour
+    options.ttl = 1 * 60 * 60;  // 1 hour
     options.level0_file_num_compaction_trigger = 6;
     options = CurrentOptions(options);
     DestroyAndReopen(options);
@@ -4623,7 +4841,7 @@ TEST_F(DBTest, DynamicCompactionOptions) {
   ASSERT_LT(NumTableFilesAtLevel(0), 4);
 }
 
-// Test dynamic FIFO copmaction options.
+// Test dynamic FIFO compaction options.
 // This test covers just option parsing and makes sure that the options are
 // correctly assigned. Also look at DBOptionsTest.SetFIFOCompactionOptions
 // test which makes sure that the FIFO compaction funcionality is working
@@ -4631,13 +4849,14 @@ TEST_F(DBTest, DynamicCompactionOptions) {
 // Even more FIFOCompactionTests are at DBTest.FIFOCompaction* .
 TEST_F(DBTest, DynamicFIFOCompactionOptions) {
   Options options;
+  options.ttl = 0;
   options.create_if_missing = true;
   DestroyAndReopen(options);
 
   // Initial defaults
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             1024 * 1024 * 1024);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 0);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 0);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             false);
 
@@ -4645,21 +4864,21 @@ TEST_F(DBTest, DynamicFIFOCompactionOptions) {
       {{"compaction_options_fifo", "{max_table_files_size=23;}"}}));
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             23);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 0);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 0);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             false);
 
-  ASSERT_OK(dbfull()->SetOptions({{"compaction_options_fifo", "{ttl=97}"}}));
+  ASSERT_OK(dbfull()->SetOptions({{"ttl", "97"}}));
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             23);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 97);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 97);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             false);
 
-  ASSERT_OK(dbfull()->SetOptions({{"compaction_options_fifo", "{ttl=203;}"}}));
+  ASSERT_OK(dbfull()->SetOptions({{"ttl", "203"}}));
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             23);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 203);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 203);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             false);
 
@@ -4667,24 +4886,25 @@ TEST_F(DBTest, DynamicFIFOCompactionOptions) {
       {{"compaction_options_fifo", "{allow_compaction=true;}"}}));
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             23);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 203);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 203);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             true);
 
   ASSERT_OK(dbfull()->SetOptions(
-      {{"compaction_options_fifo", "{max_table_files_size=31;ttl=19;}"}}));
+      {{"compaction_options_fifo", "{max_table_files_size=31;}"}}));
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             31);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 19);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 203);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             true);
 
   ASSERT_OK(dbfull()->SetOptions(
       {{"compaction_options_fifo",
-        "{max_table_files_size=51;ttl=49;allow_compaction=true;}"}}));
+        "{max_table_files_size=51;allow_compaction=true;}"}}));
+  ASSERT_OK(dbfull()->SetOptions({{"ttl", "49"}}));
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             51);
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.ttl, 49);
+  ASSERT_EQ(dbfull()->GetOptions().ttl, 49);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.allow_compaction,
             true);
 }
@@ -4695,15 +4915,15 @@ TEST_F(DBTest, DynamicUniversalCompactionOptions) {
   DestroyAndReopen(options);
 
   // Initial defaults
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.size_ratio, 1);
+  ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.size_ratio, 1U);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.min_merge_width,
-            2);
+            2u);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.max_merge_width,
             UINT_MAX);
   ASSERT_EQ(dbfull()
                 ->GetOptions()
                 .compaction_options_universal.max_size_amplification_percent,
-            200);
+            200u);
   ASSERT_EQ(dbfull()
                 ->GetOptions()
                 .compaction_options_universal.compression_size_percent,
@@ -4716,15 +4936,15 @@ TEST_F(DBTest, DynamicUniversalCompactionOptions) {
 
   ASSERT_OK(dbfull()->SetOptions(
       {{"compaction_options_universal", "{size_ratio=7;}"}}));
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.size_ratio, 7);
+  ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.size_ratio, 7u);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.min_merge_width,
-            2);
+            2u);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.max_merge_width,
             UINT_MAX);
   ASSERT_EQ(dbfull()
                 ->GetOptions()
                 .compaction_options_universal.max_size_amplification_percent,
-            200);
+            200u);
   ASSERT_EQ(dbfull()
                 ->GetOptions()
                 .compaction_options_universal.compression_size_percent,
@@ -4737,15 +4957,15 @@ TEST_F(DBTest, DynamicUniversalCompactionOptions) {
 
   ASSERT_OK(dbfull()->SetOptions(
       {{"compaction_options_universal", "{min_merge_width=11;}"}}));
-  ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.size_ratio, 7);
+  ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.size_ratio, 7u);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.min_merge_width,
-            11);
+            11u);
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_universal.max_merge_width,
             UINT_MAX);
   ASSERT_EQ(dbfull()
                 ->GetOptions()
                 .compaction_options_universal.max_size_amplification_percent,
-            200);
+            200u);
   ASSERT_EQ(dbfull()
                 ->GetOptions()
                 .compaction_options_universal.compression_size_percent,
@@ -4890,11 +5110,15 @@ TEST_F(DBTest, DynamicMiscOptions) {
   ASSERT_OK(dbfull()->TEST_GetLatestMutableCFOptions(handles_[0],
                                                      &mutable_cf_options));
   ASSERT_EQ(CompressionType::kNoCompression, mutable_cf_options.compression);
-  ASSERT_OK(dbfull()->SetOptions({{"compression", "kSnappyCompression"}}));
-  ASSERT_OK(dbfull()->TEST_GetLatestMutableCFOptions(handles_[0],
-                                                     &mutable_cf_options));
-  ASSERT_EQ(CompressionType::kSnappyCompression,
-            mutable_cf_options.compression);
+
+  if (Snappy_Supported()) {
+    ASSERT_OK(dbfull()->SetOptions({{"compression", "kSnappyCompression"}}));
+    ASSERT_OK(dbfull()->TEST_GetLatestMutableCFOptions(handles_[0],
+                                                       &mutable_cf_options));
+    ASSERT_EQ(CompressionType::kSnappyCompression,
+              mutable_cf_options.compression);
+  }
+
   // Test paranoid_file_checks already done in db_block_cache_test
   ASSERT_OK(
       dbfull()->SetOptions(handles_[1], {{"paranoid_file_checks", "true"}}));
@@ -5051,14 +5275,14 @@ class DelayedMergeOperator : public MergeOperator {
  public:
   explicit DelayedMergeOperator(DBTest* d) : db_test_(d) {}
 
-  virtual bool FullMergeV2(const MergeOperationInput& /*merge_in*/,
-                           MergeOperationOutput* merge_out) const override {
+  bool FullMergeV2(const MergeOperationInput& /*merge_in*/,
+                   MergeOperationOutput* merge_out) const override {
     db_test_->env_->addon_time_.fetch_add(1000);
     merge_out->new_value = "";
     return true;
   }
 
-  virtual const char* Name() const override { return "DelayedMergeOperator"; }
+  const char* Name() const override { return "DelayedMergeOperator"; }
 };
 
 TEST_F(DBTest, MergeTestTime) {
@@ -5137,7 +5361,7 @@ TEST_P(DBTestWithParam, FilterCompactionTimeTest) {
   options.disable_auto_compactions = true;
   options.create_if_missing = true;
   options.statistics = rocksdb::CreateDBStatistics();
-  options.statistics->stats_level_ = kExceptTimeForMutex;
+  options.statistics->set_stats_level(kExceptTimeForMutex);
   options.max_subcompactions = max_subcompactions_;
   DestroyAndReopen(options);
 
@@ -5194,7 +5418,7 @@ TEST_F(DBTest, EmptyCompactedDB) {
 TEST_F(DBTest, SuggestCompactRangeTest) {
   class CompactionFilterFactoryGetContext : public CompactionFilterFactory {
    public:
-    virtual std::unique_ptr<CompactionFilter> CreateCompactionFilter(
+    std::unique_ptr<CompactionFilter> CreateCompactionFilter(
         const CompactionFilter::Context& context) override {
       saved_context = context;
       std::unique_ptr<CompactionFilter> empty_filter;
@@ -5443,6 +5667,69 @@ TEST_F(DBTest, AutomaticConflictsWithManualCompaction) {
   manual_compaction_thread.join();
   dbfull()->TEST_WaitForCompact();
 }
+
+#ifndef ROCKSDB_LITE
+TEST_F(DBTest, CompactFilesShouldTriggerAutoCompaction) {
+  Options options = CurrentOptions();
+  options.max_background_compactions = 1;
+  options.level0_file_num_compaction_trigger = 4;
+  options.level0_slowdown_writes_trigger = 36;
+  options.level0_stop_writes_trigger = 36;
+  DestroyAndReopen(options);
+
+  // generate files for manual compaction
+  Random rnd(301);
+  for (int i = 0; i < 2; ++i) {
+    // put two keys to ensure no trivial move
+    for (int j = 0; j < 2; ++j) {
+      ASSERT_OK(Put(Key(j), RandomString(&rnd, 1024)));
+    }
+    ASSERT_OK(Flush());
+  }
+
+  rocksdb::ColumnFamilyMetaData cf_meta_data;
+  db_->GetColumnFamilyMetaData(db_->DefaultColumnFamily(), &cf_meta_data);
+
+  std::vector<std::string> input_files;
+  input_files.push_back(cf_meta_data.levels[0].files[0].name);
+
+  SyncPoint::GetInstance()->LoadDependency({
+      {"CompactFilesImpl:0",
+       "DBTest::CompactFilesShouldTriggerAutoCompaction:Begin"},
+      {"DBTest::CompactFilesShouldTriggerAutoCompaction:End",
+       "CompactFilesImpl:1"},
+  });
+
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  port::Thread manual_compaction_thread([&]() {
+      auto s = db_->CompactFiles(CompactionOptions(),
+          db_->DefaultColumnFamily(), input_files, 0);
+  });
+
+  TEST_SYNC_POINT(
+          "DBTest::CompactFilesShouldTriggerAutoCompaction:Begin");
+  // generate enough files to trigger compaction
+  for (int i = 0; i < 20; ++i) {
+    for (int j = 0; j < 2; ++j) {
+      ASSERT_OK(Put(Key(j), RandomString(&rnd, 1024)));
+    }
+    ASSERT_OK(Flush());
+  }
+  db_->GetColumnFamilyMetaData(db_->DefaultColumnFamily(), &cf_meta_data);
+  ASSERT_GT(cf_meta_data.levels[0].files.size(),
+      options.level0_file_num_compaction_trigger);
+  TEST_SYNC_POINT(
+          "DBTest::CompactFilesShouldTriggerAutoCompaction:End");
+
+  manual_compaction_thread.join();
+  dbfull()->TEST_WaitForCompact();
+
+  db_->GetColumnFamilyMetaData(db_->DefaultColumnFamily(), &cf_meta_data);
+  ASSERT_LE(cf_meta_data.levels[0].files.size(),
+      options.level0_file_num_compaction_trigger);
+}
+#endif  // ROCKSDB_LITE
 
 // Github issue #595
 // Large write batch with column families
@@ -5916,6 +6203,19 @@ TEST_F(DBTest, FailWhenCompressionNotSupportedTest) {
   }
 }
 
+TEST_F(DBTest, CreateColumnFamilyShouldFailOnIncompatibleOptions) {
+  Options options = CurrentOptions();
+  options.max_open_files = 100;
+  Reopen(options);
+
+  ColumnFamilyOptions cf_options(options);
+  // ttl is now supported when max_open_files is -1.
+  cf_options.ttl = 3600;
+  ColumnFamilyHandle* handle;
+  ASSERT_OK(db_->CreateColumnFamily(cf_options, "pikachu", &handle));
+  delete handle;
+}
+
 #ifndef ROCKSDB_LITE
 TEST_F(DBTest, RowCache) {
   Options options = CurrentOptions();
@@ -6081,10 +6381,140 @@ TEST_F(DBTest, ThreadLocalPtrDeadlock) {
   fprintf(stderr, "Done. Flushed %d times, destroyed %d threads\n",
           flushes_done.load(), threads_destroyed.load());
 }
+
+TEST_F(DBTest, LargeBlockSizeTest) {
+  Options options = CurrentOptions();
+  CreateAndReopenWithCF({"pikachu"}, options);
+  ASSERT_OK(Put(0, "foo", "bar"));
+  BlockBasedTableOptions table_options;
+  table_options.block_size = 8LL * 1024 * 1024 * 1024LL;
+  options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+  ASSERT_NOK(TryReopenWithColumnFamilies({"default", "pikachu"}, options));
+}
+
+#ifndef ROCKSDB_LITE
+
+TEST_F(DBTest, CreationTimeOfOldestFile) {
+  const int kNumKeysPerFile = 32;
+  const int kNumLevelFiles = 2;
+  const int kValueSize = 100;
+
+  Options options = CurrentOptions();
+  options.max_open_files = -1;
+  env_->time_elapse_only_sleep_ = false;
+  options.env = env_;
+
+  env_->addon_time_.store(0);
+  DestroyAndReopen(options);
+
+  bool set_file_creation_time_to_zero = true;
+  int idx = 0;
+
+  int64_t time_1 = 0;
+  env_->GetCurrentTime(&time_1);
+  const uint64_t uint_time_1 = static_cast<uint64_t>(time_1);
+
+  // Add 50 hours
+  env_->addon_time_.fetch_add(50 * 60 * 60);
+
+  int64_t time_2 = 0;
+  env_->GetCurrentTime(&time_2);
+  const uint64_t uint_time_2 = static_cast<uint64_t>(time_2);
+
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "PropertyBlockBuilder::AddTableProperty:Start", [&](void* arg) {
+        TableProperties* props = reinterpret_cast<TableProperties*>(arg);
+        if (set_file_creation_time_to_zero) {
+          if (idx == 0) {
+            props->file_creation_time = 0;
+            idx++;
+          } else if (idx == 1) {
+            props->file_creation_time = uint_time_1;
+            idx = 0;
+          }
+        } else {
+          if (idx == 0) {
+            props->file_creation_time = uint_time_1;
+            idx++;
+          } else if (idx == 1) {
+            props->file_creation_time = uint_time_2;
+          }
+        }
+      });
+  // Set file creation time in manifest all to 0.
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "FileMetaData::FileMetaData", [&](void* arg) {
+        FileMetaData* meta = static_cast<FileMetaData*>(arg);
+        meta->file_creation_time = 0;
+      });
+  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+
+  Random rnd(301);
+  for (int i = 0; i < kNumLevelFiles; ++i) {
+    for (int j = 0; j < kNumKeysPerFile; ++j) {
+      ASSERT_OK(
+          Put(Key(i * kNumKeysPerFile + j), RandomString(&rnd, kValueSize)));
+    }
+    Flush();
+  }
+
+  // At this point there should be 2 files, one with file_creation_time = 0 and
+  // the other non-zero. GetCreationTimeOfOldestFile API should return 0.
+  uint64_t creation_time;
+  Status s1 = dbfull()->GetCreationTimeOfOldestFile(&creation_time);
+  ASSERT_EQ(0, creation_time);
+  ASSERT_EQ(s1, Status::OK());
+
+  // Testing with non-zero file creation time.
+  set_file_creation_time_to_zero = false;
+  options = CurrentOptions();
+  options.max_open_files = -1;
+  env_->time_elapse_only_sleep_ = false;
+  options.env = env_;
+
+  env_->addon_time_.store(0);
+  DestroyAndReopen(options);
+
+  for (int i = 0; i < kNumLevelFiles; ++i) {
+    for (int j = 0; j < kNumKeysPerFile; ++j) {
+      ASSERT_OK(
+          Put(Key(i * kNumKeysPerFile + j), RandomString(&rnd, kValueSize)));
+    }
+    Flush();
+  }
+
+  // At this point there should be 2 files with non-zero file creation time.
+  // GetCreationTimeOfOldestFile API should return non-zero value.
+  uint64_t ctime;
+  Status s2 = dbfull()->GetCreationTimeOfOldestFile(&ctime);
+  ASSERT_EQ(uint_time_1, ctime);
+  ASSERT_EQ(s2, Status::OK());
+
+  // Testing with max_open_files != -1
+  options = CurrentOptions();
+  options.max_open_files = 10;
+  DestroyAndReopen(options);
+  Status s3 = dbfull()->GetCreationTimeOfOldestFile(&ctime);
+  ASSERT_EQ(s3, Status::NotSupported());
+
+  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
+}
+
+#endif
+
 }  // namespace rocksdb
+
+#ifdef ROCKSDB_UNITTESTS_WITH_CUSTOM_OBJECTS_FROM_STATIC_LIBS
+extern "C" {
+void RegisterCustomObjects(int argc, char** argv);
+}
+#else
+void RegisterCustomObjects(int /*argc*/, char** /*argv*/) {}
+#endif  // !ROCKSDB_UNITTESTS_WITH_CUSTOM_OBJECTS_FROM_STATIC_LIBS
 
 int main(int argc, char** argv) {
   rocksdb::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
+  RegisterCustomObjects(argc, argv);
   return RUN_ALL_TESTS();
 }

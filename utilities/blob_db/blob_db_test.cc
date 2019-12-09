@@ -6,25 +6,28 @@
 #ifndef ROCKSDB_LITE
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "db/blob_index.h"
 #include "db/db_test_util.h"
+#include "file/file_util.h"
+#include "file/sst_file_manager_impl.h"
 #include "port/port.h"
 #include "rocksdb/utilities/debug.h"
+#include "test_util/fault_injection_test_env.h"
+#include "test_util/sync_point.h"
+#include "test_util/testharness.h"
 #include "util/cast_util.h"
-#include "util/fault_injection_test_env.h"
 #include "util/random.h"
 #include "util/sst_file_manager_impl.h"
 #include "util/string_util.h"
-#include "util/sync_point.h"
-#include "util/testharness.h"
 #include "utilities/blob_db/blob_db.h"
 #include "utilities/blob_db/blob_db_impl.h"
-#include "utilities/blob_db/blob_index.h"
 
 namespace rocksdb {
 namespace blob_db {
@@ -48,7 +51,7 @@ class BlobDBTest : public testing::Test {
     assert(s.ok());
   }
 
-  ~BlobDBTest() {
+  ~BlobDBTest() override {
     SyncPoint::GetInstance()->ClearAllCallBacks();
     Destroy();
   }
@@ -70,6 +73,12 @@ class BlobDBTest : public testing::Test {
     delete blob_db_;
     blob_db_ = nullptr;
     Open(bdb_options, options);
+  }
+
+  void Close() {
+    assert(blob_db_ != nullptr);
+    delete blob_db_;
+    blob_db_ = nullptr;
   }
 
   void Destroy() {
@@ -803,10 +812,73 @@ TEST_F(BlobDBTest, SstFileManager) {
   ASSERT_EQ(0, files_deleted_directly);
   Destroy();
   // Make sure that DestroyBlobDB() also goes through delete scheduler.
-  ASSERT_GE(2, files_scheduled_to_delete);
-  ASSERT_EQ(0, files_deleted_directly);
+  ASSERT_GE(files_scheduled_to_delete, 2);
+  // Due to a timing issue, the WAL may or may not be deleted directly. The
+  // blob file is first scheduled, followed by WAL. If the background trash
+  // thread does not wake up on time, the WAL file will be directly
+  // deleted as the trash size will be > DB size
+  ASSERT_LE(files_deleted_directly, 1);
   SyncPoint::GetInstance()->DisableProcessing();
   sfm->WaitForEmptyTrash();
+}
+
+TEST_F(BlobDBTest, SstFileManagerRestart) {
+  int files_deleted_directly = 0;
+  int files_scheduled_to_delete = 0;
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "SstFileManagerImpl::ScheduleFileDeletion",
+      [&](void * /*arg*/) { files_scheduled_to_delete++; });
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "DeleteScheduler::DeleteFile",
+      [&](void * /*arg*/) { files_deleted_directly++; });
+
+  // run the same test for Get(), MultiGet() and Iterator each.
+  std::shared_ptr<SstFileManager> sst_file_manager(
+      NewSstFileManager(mock_env_.get()));
+  sst_file_manager->SetDeleteRateBytesPerSecond(1);
+  SstFileManagerImpl *sfm =
+      static_cast<SstFileManagerImpl *>(sst_file_manager.get());
+
+  BlobDBOptions bdb_options;
+  bdb_options.min_blob_size = 0;
+  Options db_options;
+
+  SyncPoint::GetInstance()->EnableProcessing();
+  db_options.sst_file_manager = sst_file_manager;
+
+  Open(bdb_options, db_options);
+  std::string blob_dir = blob_db_impl()->TEST_blob_dir();
+  blob_db_->Put(WriteOptions(), "foo", "bar");
+  Close();
+
+  // Create 3 dummy trash files under the blob_dir
+  CreateFile(db_options.env, blob_dir + "/000666.blob.trash", "", false);
+  CreateFile(db_options.env, blob_dir + "/000888.blob.trash", "", true);
+  CreateFile(db_options.env, blob_dir + "/something_not_match.trash", "",
+             false);
+
+  // Make sure that reopening the DB rescan the existing trash files
+  Open(bdb_options, db_options);
+  ASSERT_GE(files_scheduled_to_delete, 3);
+  // Depending on timing, the WAL file may or may not be directly deleted
+  ASSERT_LE(files_deleted_directly, 1);
+
+  sfm->WaitForEmptyTrash();
+
+  // There should be exact one file under the blob dir now.
+  std::vector<std::string> all_files;
+  ASSERT_OK(db_options.env->GetChildren(blob_dir, &all_files));
+  int nfiles = 0;
+  for (const auto &f : all_files) {
+    assert(!f.empty());
+    if (f[0] == '.') {
+      continue;
+    }
+    nfiles++;
+  }
+  ASSERT_EQ(nfiles, 1);
+
+  SyncPoint::GetInstance()->DisableProcessing();
 }
 
 TEST_F(BlobDBTest, SnapshotAndGarbageCollection) {
@@ -928,6 +1000,7 @@ TEST_F(BlobDBTest, GetLiveFilesMetaData) {
   // Path should be relative to db_name, but begin with slash.
   std::string filename = "/blob_dir/000001.blob";
   ASSERT_EQ(filename, metadata[0].name);
+  ASSERT_EQ(1, metadata[0].file_number);
   ASSERT_EQ("default", metadata[0].column_family_name);
   std::vector<std::string> livefile;
   uint64_t mfs;
@@ -1234,12 +1307,12 @@ TEST_F(BlobDBTest, InlineSmallValues) {
 
 TEST_F(BlobDBTest, CompactionFilterNotSupported) {
   class TestCompactionFilter : public CompactionFilter {
-    virtual const char *Name() const { return "TestCompactionFilter"; }
+    const char *Name() const override { return "TestCompactionFilter"; }
   };
   class TestCompactionFilterFactory : public CompactionFilterFactory {
-    virtual const char *Name() const { return "TestCompactionFilterFactory"; }
-    virtual std::unique_ptr<CompactionFilter> CreateCompactionFilter(
-        const CompactionFilter::Context & /*context*/) {
+    const char *Name() const override { return "TestCompactionFilterFactory"; }
+    std::unique_ptr<CompactionFilter> CreateCompactionFilter(
+        const CompactionFilter::Context & /*context*/) override {
       return std::unique_ptr<CompactionFilter>(new TestCompactionFilter());
     }
   };
@@ -1540,6 +1613,297 @@ TEST_F(BlobDBTest, DisableFileDeletions) {
     ASSERT_EQ(0, blob_db_impl()->TEST_GetObsoleteFiles().size());
     VerifyDB({});
   }
+}
+
+TEST_F(BlobDBTest, MaintainBlobFileToSstMapping) {
+  BlobDBOptions bdb_options;
+  bdb_options.enable_garbage_collection = true;
+  bdb_options.disable_background_tasks = true;
+  Open(bdb_options);
+
+  // Register some dummy blob files.
+  blob_db_impl()->TEST_AddDummyBlobFile(1, /* immutable_sequence */ 200);
+  blob_db_impl()->TEST_AddDummyBlobFile(2, /* immutable_sequence */ 300);
+  blob_db_impl()->TEST_AddDummyBlobFile(3, /* immutable_sequence */ 400);
+  blob_db_impl()->TEST_AddDummyBlobFile(4, /* immutable_sequence */ 500);
+  blob_db_impl()->TEST_AddDummyBlobFile(5, /* immutable_sequence */ 600);
+
+  // Initialize the blob <-> SST file mapping. First, add some SST files with
+  // blob file references, then some without.
+  std::vector<LiveFileMetaData> live_files;
+
+  for (uint64_t i = 1; i <= 10; ++i) {
+    LiveFileMetaData live_file;
+    live_file.file_number = i;
+    live_file.oldest_blob_file_number = ((i - 1) % 5) + 1;
+
+    live_files.emplace_back(live_file);
+  }
+
+  for (uint64_t i = 11; i <= 20; ++i) {
+    LiveFileMetaData live_file;
+    live_file.file_number = i;
+
+    live_files.emplace_back(live_file);
+  }
+
+  blob_db_impl()->TEST_InitializeBlobFileToSstMapping(live_files);
+
+  // Check that the blob <-> SST mappings have been correctly initialized.
+  auto blob_files = blob_db_impl()->TEST_GetBlobFiles();
+
+  ASSERT_EQ(blob_files.size(), 5);
+
+  {
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 5);
+    for (size_t i = 0; i < 5; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 1);
+    }
+
+    ASSERT_TRUE(blob_db_impl()->TEST_GetObsoleteFiles().empty());
+  }
+
+  {
+    const std::vector<std::unordered_set<uint64_t>> expected_sst_files{
+        {1, 6}, {2, 7}, {3, 8}, {4, 9}, {5, 10}};
+    const std::vector<bool> expected_obsolete{false, false, false, false,
+                                              false};
+    for (size_t i = 0; i < 5; ++i) {
+      const auto &blob_file = blob_files[i];
+      ASSERT_EQ(blob_file->GetLinkedSstFiles(), expected_sst_files[i]);
+      ASSERT_EQ(blob_file->Obsolete(), expected_obsolete[i]);
+    }
+
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 5);
+    for (size_t i = 0; i < 5; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 1);
+    }
+
+    ASSERT_TRUE(blob_db_impl()->TEST_GetObsoleteFiles().empty());
+  }
+
+  // Simulate a flush where the SST does not reference any blob files.
+  {
+    FlushJobInfo info{};
+    info.file_number = 21;
+    info.smallest_seqno = 1;
+    info.largest_seqno = 100;
+
+    blob_db_impl()->TEST_ProcessFlushJobInfo(info);
+
+    const std::vector<std::unordered_set<uint64_t>> expected_sst_files{
+        {1, 6}, {2, 7}, {3, 8}, {4, 9}, {5, 10}};
+    const std::vector<bool> expected_obsolete{false, false, false, false,
+                                              false};
+    for (size_t i = 0; i < 5; ++i) {
+      const auto &blob_file = blob_files[i];
+      ASSERT_EQ(blob_file->GetLinkedSstFiles(), expected_sst_files[i]);
+      ASSERT_EQ(blob_file->Obsolete(), expected_obsolete[i]);
+    }
+
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 5);
+    for (size_t i = 0; i < 5; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 1);
+    }
+
+    ASSERT_TRUE(blob_db_impl()->TEST_GetObsoleteFiles().empty());
+  }
+
+  // Simulate a flush where the SST references a blob file.
+  {
+    FlushJobInfo info{};
+    info.file_number = 22;
+    info.oldest_blob_file_number = 5;
+    info.smallest_seqno = 101;
+    info.largest_seqno = 200;
+
+    blob_db_impl()->TEST_ProcessFlushJobInfo(info);
+
+    const std::vector<std::unordered_set<uint64_t>> expected_sst_files{
+        {1, 6}, {2, 7}, {3, 8}, {4, 9}, {5, 10, 22}};
+    const std::vector<bool> expected_obsolete{false, false, false, false,
+                                              false};
+    for (size_t i = 0; i < 5; ++i) {
+      const auto &blob_file = blob_files[i];
+      ASSERT_EQ(blob_file->GetLinkedSstFiles(), expected_sst_files[i]);
+      ASSERT_EQ(blob_file->Obsolete(), expected_obsolete[i]);
+    }
+
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 5);
+    for (size_t i = 0; i < 5; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 1);
+    }
+
+    ASSERT_TRUE(blob_db_impl()->TEST_GetObsoleteFiles().empty());
+  }
+
+  // Simulate a compaction. Some inputs and outputs have blob file references,
+  // some don't. There is also a trivial move (which means the SST appears on
+  // both the input and the output list). Blob file 1 loses all its linked SSTs,
+  // and since it got marked immutable at sequence number 200 which has already
+  // been flushed, it can be marked obsolete.
+  {
+    CompactionJobInfo info{};
+    info.input_file_infos.emplace_back(CompactionFileInfo{1, 1, 1});
+    info.input_file_infos.emplace_back(CompactionFileInfo{1, 2, 2});
+    info.input_file_infos.emplace_back(CompactionFileInfo{1, 6, 1});
+    info.input_file_infos.emplace_back(
+        CompactionFileInfo{1, 11, kInvalidBlobFileNumber});
+    info.input_file_infos.emplace_back(CompactionFileInfo{1, 22, 5});
+    info.output_file_infos.emplace_back(CompactionFileInfo{2, 22, 5});
+    info.output_file_infos.emplace_back(CompactionFileInfo{2, 23, 3});
+    info.output_file_infos.emplace_back(
+        CompactionFileInfo{2, 24, kInvalidBlobFileNumber});
+
+    blob_db_impl()->TEST_ProcessCompactionJobInfo(info);
+
+    const std::vector<std::unordered_set<uint64_t>> expected_sst_files{
+        {}, {7}, {3, 8, 23}, {4, 9}, {5, 10, 22}};
+    const std::vector<bool> expected_obsolete{true, false, false, false, false};
+    for (size_t i = 0; i < 5; ++i) {
+      const auto &blob_file = blob_files[i];
+      ASSERT_EQ(blob_file->GetLinkedSstFiles(), expected_sst_files[i]);
+      ASSERT_EQ(blob_file->Obsolete(), expected_obsolete[i]);
+    }
+
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 4);
+    for (size_t i = 0; i < 4; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 2);
+    }
+
+    auto obsolete_files = blob_db_impl()->TEST_GetObsoleteFiles();
+    ASSERT_EQ(obsolete_files.size(), 1);
+    ASSERT_EQ(obsolete_files[0]->BlobFileNumber(), 1);
+  }
+
+  // Simulate another compaction. Blob file 2 loses all its linked SSTs
+  // but since it got marked immutable at sequence number 300 which hasn't
+  // been flushed yet, it cannot be marked obsolete at this point.
+  {
+    CompactionJobInfo info{};
+    info.input_file_infos.emplace_back(CompactionFileInfo{1, 7, 2});
+    info.input_file_infos.emplace_back(CompactionFileInfo{2, 22, 5});
+    info.output_file_infos.emplace_back(CompactionFileInfo{2, 25, 3});
+
+    blob_db_impl()->TEST_ProcessCompactionJobInfo(info);
+
+    const std::vector<std::unordered_set<uint64_t>> expected_sst_files{
+        {}, {}, {3, 8, 23, 25}, {4, 9}, {5, 10}};
+    const std::vector<bool> expected_obsolete{true, false, false, false, false};
+    for (size_t i = 0; i < 5; ++i) {
+      const auto &blob_file = blob_files[i];
+      ASSERT_EQ(blob_file->GetLinkedSstFiles(), expected_sst_files[i]);
+      ASSERT_EQ(blob_file->Obsolete(), expected_obsolete[i]);
+    }
+
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 4);
+    for (size_t i = 0; i < 4; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 2);
+    }
+
+    auto obsolete_files = blob_db_impl()->TEST_GetObsoleteFiles();
+    ASSERT_EQ(obsolete_files.size(), 1);
+    ASSERT_EQ(obsolete_files[0]->BlobFileNumber(), 1);
+  }
+
+  // Simulate a flush with largest sequence number 300. This will make it
+  // possible to mark blob file 2 obsolete.
+  {
+    FlushJobInfo info{};
+    info.file_number = 26;
+    info.smallest_seqno = 201;
+    info.largest_seqno = 300;
+
+    blob_db_impl()->TEST_ProcessFlushJobInfo(info);
+
+    const std::vector<std::unordered_set<uint64_t>> expected_sst_files{
+        {}, {}, {3, 8, 23, 25}, {4, 9}, {5, 10}};
+    const std::vector<bool> expected_obsolete{true, true, false, false, false};
+    for (size_t i = 0; i < 5; ++i) {
+      const auto &blob_file = blob_files[i];
+      ASSERT_EQ(blob_file->GetLinkedSstFiles(), expected_sst_files[i]);
+      ASSERT_EQ(blob_file->Obsolete(), expected_obsolete[i]);
+    }
+
+    auto live_imm_files = blob_db_impl()->TEST_GetLiveImmNonTTLFiles();
+    ASSERT_EQ(live_imm_files.size(), 3);
+    for (size_t i = 0; i < 3; ++i) {
+      ASSERT_EQ(live_imm_files[i]->BlobFileNumber(), i + 3);
+    }
+
+    auto obsolete_files = blob_db_impl()->TEST_GetObsoleteFiles();
+    ASSERT_EQ(obsolete_files.size(), 2);
+    ASSERT_EQ(obsolete_files[0]->BlobFileNumber(), 1);
+    ASSERT_EQ(obsolete_files[1]->BlobFileNumber(), 2);
+  }
+}
+
+TEST_F(BlobDBTest, ShutdownWait) {
+  BlobDBOptions bdb_options;
+  bdb_options.ttl_range_secs = 100;
+  bdb_options.min_blob_size = 0;
+  bdb_options.disable_background_tasks = false;
+  Options options;
+  options.env = mock_env_.get();
+
+  SyncPoint::GetInstance()->LoadDependency({
+      {"BlobDBImpl::EvictExpiredFiles:0", "BlobDBTest.ShutdownWait:0"},
+      {"BlobDBTest.ShutdownWait:1", "BlobDBImpl::EvictExpiredFiles:1"},
+      {"BlobDBImpl::EvictExpiredFiles:2", "BlobDBTest.ShutdownWait:2"},
+      {"BlobDBTest.ShutdownWait:3", "BlobDBImpl::EvictExpiredFiles:3"},
+  });
+  // Force all tasks to be scheduled immediately.
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "TimeQueue::Add:item.end", [&](void *arg) {
+        std::chrono::steady_clock::time_point *tp =
+            static_cast<std::chrono::steady_clock::time_point *>(arg);
+        *tp =
+            std::chrono::steady_clock::now() - std::chrono::milliseconds(10000);
+      });
+
+  rocksdb::SyncPoint::GetInstance()->SetCallBack(
+      "BlobDBImpl::EvictExpiredFiles:cb", [&](void * /*arg*/) {
+        // Sleep 3 ms to increase the chance of data race.
+        // We've synced up the code so that EvictExpiredFiles()
+        // is called concurrently with ~BlobDBImpl().
+        // ~BlobDBImpl() is supposed to wait for all background
+        // task to shutdown before doing anything else. In order
+        // to use the same test to reproduce a bug of the waiting
+        // logic, we wait a little bit here, so that TSAN can
+        // catch the data race.
+        // We should improve the test if we find a better way.
+        Env::Default()->SleepForMicroseconds(3000);
+      });
+
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  Open(bdb_options, options);
+  mock_env_->set_current_time(50);
+  std::map<std::string, std::string> data;
+  ASSERT_OK(PutWithTTL("foo", "bar", 100, &data));
+  auto blob_files = blob_db_impl()->TEST_GetBlobFiles();
+  ASSERT_EQ(1, blob_files.size());
+  auto blob_file = blob_files[0];
+  ASSERT_FALSE(blob_file->Immutable());
+  ASSERT_FALSE(blob_file->Obsolete());
+  VerifyDB(data);
+
+  TEST_SYNC_POINT("BlobDBTest.ShutdownWait:0");
+  mock_env_->set_current_time(250);
+  // The key should expired now.
+  TEST_SYNC_POINT("BlobDBTest.ShutdownWait:1");
+
+  TEST_SYNC_POINT("BlobDBTest.ShutdownWait:2");
+  TEST_SYNC_POINT("BlobDBTest.ShutdownWait:3");
+  Close();
+
+  SyncPoint::GetInstance()->DisableProcessing();
 }
 
 }  //  namespace blob_db

@@ -1,3 +1,4 @@
+// Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 #pragma once
 
 #include <algorithm>
@@ -19,7 +20,7 @@ class VectorIterator : public InternalIterator {
       : keys_(std::move(keys)),
         values_(std::move(values)),
         indexed_cmp_(icmp, &keys_),
-        current_(keys.size()) {
+        current_(0) {
     assert(keys_.size() == values_.size());
 
     indices_.reserve(keys_.size());

@@ -8,10 +8,15 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #pragma once
 #include <errno.h>
+#if defined(ROCKSDB_IOURING_PRESENT)
+#include <liburing.h>
+#include <sys/uio.h>
+#endif
 #include <unistd.h>
 #include <atomic>
 #include <string>
 #include "rocksdb/env.h"
+#include "util/thread_local.h"
 
 // For non linux platform, the following macros are used only as place
 // holder.
@@ -41,6 +46,9 @@ static Status IOError(const std::string& context, const std::string& file_name,
                            strerror(err_number));
   case ESTALE:
     return Status::IOError(Status::kStaleFile);
+  case ENOENT:
+    return Status::PathNotFound(IOErrorMsg(context, file_name),
+                                strerror(err_number));
   default:
     return Status::IOError(IOErrorMsg(context, file_name),
                            strerror(err_number));
@@ -76,20 +84,50 @@ class PosixSequentialFile : public SequentialFile {
   }
 };
 
+#if defined(ROCKSDB_IOURING_PRESENT)
+// io_uring instance queue depth
+const unsigned int kIoUringDepth = 256;
+
+inline void DeleteIOUring(void* p) {
+  struct io_uring* iu = static_cast<struct io_uring*>(p);
+  delete iu;
+}
+
+inline struct io_uring* CreateIOUring() {
+  struct io_uring* new_io_uring = new struct io_uring;
+  int ret = io_uring_queue_init(kIoUringDepth, new_io_uring, 0);
+  if (ret) {
+    delete new_io_uring;
+    new_io_uring = nullptr;
+  }
+  return new_io_uring;
+}
+#endif // defined(ROCKSDB_IOURING_PRESENT)
+
 class PosixRandomAccessFile : public RandomAccessFile {
  protected:
   std::string filename_;
   int fd_;
   bool use_direct_io_;
   size_t logical_sector_size_;
+#if defined(ROCKSDB_IOURING_PRESENT)
+  ThreadLocalPtr* thread_local_io_urings_;
+#endif
 
  public:
   PosixRandomAccessFile(const std::string& fname, int fd,
-                        const EnvOptions& options);
+                        const EnvOptions& options
+#if defined(ROCKSDB_IOURING_PRESENT)
+                        ,
+                        ThreadLocalPtr* thread_local_io_urings
+#endif
+  );
   virtual ~PosixRandomAccessFile();
 
   virtual Status Read(uint64_t offset, size_t n, Slice* result,
                       char* scratch) const override;
+
+  virtual Status MultiRead(ReadRequest* reqs, size_t num_reqs) override;
 
   virtual Status Prefetch(uint64_t offset, size_t n) override;
 
@@ -115,6 +153,11 @@ class PosixWritableFile : public WritableFile {
   bool allow_fallocate_;
   bool fallocate_with_keep_size_;
 #endif
+#ifdef ROCKSDB_RANGESYNC_PRESENT
+  // Even if the syscall is present, the filesystem may still not properly
+  // support it, so we need to do a dynamic check too.
+  bool sync_file_range_supported_;
+#endif  // ROCKSDB_RANGESYNC_PRESENT
 
  public:
   explicit PosixWritableFile(const std::string& fname, int fd,
@@ -141,9 +184,7 @@ class PosixWritableFile : public WritableFile {
 #ifdef ROCKSDB_FALLOCATE_PRESENT
   virtual Status Allocate(uint64_t offset, uint64_t len) override;
 #endif
-#ifdef ROCKSDB_RANGESYNC_PRESENT
   virtual Status RangeSync(uint64_t offset, uint64_t nbytes) override;
-#endif
 #ifdef OS_LINUX
   virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 #endif

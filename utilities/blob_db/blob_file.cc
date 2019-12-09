@@ -1,3 +1,4 @@
+
 //  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under both the GPLv2 (found in the
 //  COPYING file in the root directory) and Apache 2.0 License
@@ -5,63 +6,42 @@
 #ifndef ROCKSDB_LITE
 #include "utilities/blob_db/blob_file.h"
 
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS
-#endif
-
-#include <inttypes.h>
 #include <stdio.h>
+#include <cinttypes>
 
 #include <algorithm>
-#include <limits>
 #include <memory>
 
 #include "db/column_family.h"
-#include "db/db_impl.h"
+#include "db/db_impl/db_impl.h"
 #include "db/dbformat.h"
-#include "util/filename.h"
-#include "util/logging.h"
+#include "file/filename.h"
+#include "file/readahead_raf.h"
+#include "logging/logging.h"
 #include "utilities/blob_db/blob_db_impl.h"
 
 namespace rocksdb {
 
 namespace blob_db {
 
-BlobFile::BlobFile()
-    : parent_(nullptr),
-      file_number_(0),
-      info_log_(nullptr),
-      column_family_id_(std::numeric_limits<uint32_t>::max()),
-      compression_(kNoCompression),
-      has_ttl_(false),
-      blob_count_(0),
-      file_size_(0),
-      closed_(false),
-      obsolete_(false),
-      expiration_range_({0, 0}),
-      last_access_(-1),
-      last_fsync_(0),
-      header_valid_(false),
-      footer_valid_(false) {}
-
 BlobFile::BlobFile(const BlobDBImpl* p, const std::string& bdir, uint64_t fn,
                    Logger* info_log)
+    : parent_(p), path_to_dir_(bdir), file_number_(fn), info_log_(info_log) {}
+
+BlobFile::BlobFile(const BlobDBImpl* p, const std::string& bdir, uint64_t fn,
+                   Logger* info_log, uint32_t column_family_id,
+                   CompressionType compression, bool has_ttl,
+                   const ExpirationRange& expiration_range)
     : parent_(p),
       path_to_dir_(bdir),
       file_number_(fn),
       info_log_(info_log),
-      column_family_id_(std::numeric_limits<uint32_t>::max()),
-      compression_(kNoCompression),
-      has_ttl_(false),
-      blob_count_(0),
-      file_size_(0),
-      closed_(false),
-      obsolete_(false),
-      expiration_range_({0, 0}),
-      last_access_(-1),
-      last_fsync_(0),
-      header_valid_(false),
-      footer_valid_(false) {}
+      column_family_id_(column_family_id),
+      compression_(compression),
+      has_ttl_(has_ttl),
+      expiration_range_(expiration_range),
+      header_(column_family_id, compression, has_ttl, expiration_range),
+      header_valid_(true) {}
 
 BlobFile::~BlobFile() {
   if (obsolete_) {
@@ -74,7 +54,7 @@ BlobFile::~BlobFile() {
   }
 }
 
-uint32_t BlobFile::column_family_id() const { return column_family_id_; }
+uint32_t BlobFile::GetColumnFamilyId() const { return column_family_id_; }
 
 std::string BlobFile::PathName() const {
   return BlobFileName(path_to_dir_, file_number_);
@@ -127,7 +107,7 @@ bool BlobFile::NeedsFsync(bool hard, uint64_t bytes_per_sync) const {
                 : (file_size_ - last_fsync_) >= bytes_per_sync;
 }
 
-Status BlobFile::WriteFooterAndCloseLocked() {
+Status BlobFile::WriteFooterAndCloseLocked(SequenceNumber sequence) {
   BlobLogFooter footer;
   footer.blob_count = blob_count_;
   if (HasTTL()) {
@@ -138,6 +118,7 @@ Status BlobFile::WriteFooterAndCloseLocked() {
   Status s = log_writer_->AppendFooter(footer);
   if (s.ok()) {
     closed_ = true;
+    immutable_sequence_ = sequence;
     file_size_ += BlobLogFooter::kSize;
   }
   // delete the sequential writer
@@ -244,14 +225,14 @@ Status BlobFile::ReadMetadata(Env* env, const EnvOptions& env_options) {
     file_size_ = file_size;
   } else {
     ROCKS_LOG_ERROR(info_log_,
-                    "Failed to get size of blob file %" ROCKSDB_PRIszt
+                    "Failed to get size of blob file %" PRIu64
                     ", status: %s",
                     file_number_, s.ToString().c_str());
     return s;
   }
   if (file_size < BlobLogHeader::kSize) {
     ROCKS_LOG_ERROR(info_log_,
-                    "Incomplete blob file blob file %" ROCKSDB_PRIszt
+                    "Incomplete blob file blob file %" PRIu64
                     ", size: %" PRIu64,
                     file_number_, file_size);
     return Status::Corruption("Incomplete blob file header.");
@@ -262,7 +243,7 @@ Status BlobFile::ReadMetadata(Env* env, const EnvOptions& env_options) {
   s = env->NewRandomAccessFile(PathName(), &file, env_options);
   if (!s.ok()) {
     ROCKS_LOG_ERROR(info_log_,
-                    "Failed to open blob file %" ROCKSDB_PRIszt ", status: %s",
+                    "Failed to open blob file %" PRIu64 ", status: %s",
                     file_number_, s.ToString().c_str());
     return s;
   }
@@ -275,7 +256,7 @@ Status BlobFile::ReadMetadata(Env* env, const EnvOptions& env_options) {
   s = file_reader->Read(0, BlobLogHeader::kSize, &header_slice, header_buf);
   if (!s.ok()) {
     ROCKS_LOG_ERROR(info_log_,
-                    "Failed to read header of blob file %" ROCKSDB_PRIszt
+                    "Failed to read header of blob file %" PRIu64
                     ", status: %s",
                     file_number_, s.ToString().c_str());
     return s;
@@ -284,7 +265,7 @@ Status BlobFile::ReadMetadata(Env* env, const EnvOptions& env_options) {
   s = header.DecodeFrom(header_slice);
   if (!s.ok()) {
     ROCKS_LOG_ERROR(info_log_,
-                    "Failed to decode header of blob file %" ROCKSDB_PRIszt
+                    "Failed to decode header of blob file %" PRIu64
                     ", status: %s",
                     file_number_, s.ToString().c_str());
     return s;
@@ -309,7 +290,7 @@ Status BlobFile::ReadMetadata(Env* env, const EnvOptions& env_options) {
                         &footer_slice, footer_buf);
   if (!s.ok()) {
     ROCKS_LOG_ERROR(info_log_,
-                    "Failed to read footer of blob file %" ROCKSDB_PRIszt
+                    "Failed to read footer of blob file %" PRIu64
                     ", status: %s",
                     file_number_, s.ToString().c_str());
     return s;

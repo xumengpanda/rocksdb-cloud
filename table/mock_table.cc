@@ -6,11 +6,11 @@
 #include "table/mock_table.h"
 
 #include "db/dbformat.h"
+#include "file/random_access_file_reader.h"
 #include "port/port.h"
 #include "rocksdb/table_properties.h"
 #include "table/get_context.h"
 #include "util/coding.h"
-#include "util/file_reader_writer.h"
 
 namespace rocksdb {
 namespace mock {
@@ -28,7 +28,8 @@ stl_wrappers::KVMap MakeMockFile(
 
 InternalIterator* MockTableReader::NewIterator(
     const ReadOptions&, const SliceTransform* /* prefix_extractor */,
-    Arena* /*arena*/, bool /*skip_filters*/, bool /*for_compaction*/) {
+    Arena* /*arena*/, bool /*skip_filters*/, TableReaderCaller /*caller*/,
+    size_t /*compaction_readahead_size*/) {
   return new MockTableIterator(table_);
 }
 

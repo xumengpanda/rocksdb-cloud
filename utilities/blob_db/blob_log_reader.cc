@@ -9,14 +9,14 @@
 
 #include <algorithm>
 
+#include "file/random_access_file_reader.h"
 #include "monitoring/statistics.h"
-#include "util/file_reader_writer.h"
 #include "util/stop_watch.h"
 
 namespace rocksdb {
 namespace blob_db {
 
-Reader::Reader(unique_ptr<RandomAccessFileReader>&& file_reader, Env* env,
+Reader::Reader(std::unique_ptr<RandomAccessFileReader>&& file_reader, Env* env,
                Statistics* statistics)
     : file_(std::move(file_reader)),
       env_(env),
