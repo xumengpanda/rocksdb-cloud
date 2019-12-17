@@ -100,14 +100,22 @@ enum class OptionVerificationType {
                          // and verification processes.
 };
 
+enum OptionTypeFlags {
+  kNone = 0x00,     // No flags
+  kMutable = 0x01,  // Option is mutable
+};
 // A struct for storing constant option information such as option name,
 // option type, and offset.
 struct OptionTypeInfo {
   int offset;
   OptionType type;
   OptionVerificationType verification;
-  bool is_mutable;
+  OptionTypeFlags flags;
   int mutable_offset;
+
+  bool IsMutable() const {
+    return (flags & OptionTypeFlags::kMutable) == OptionTypeFlags::kMutable;
+  }
 };
 
 // A helper function that converts "opt_address" to a std::string
