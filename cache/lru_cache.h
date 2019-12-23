@@ -305,6 +305,38 @@ class ALIGN_AS(CACHE_LINE_SIZE) LRUCacheShard final : public CacheShard {
   mutable port::Mutex mutex_;
 };
 
+struct LRUCacheOptions : public ShardedCacheOptions {
+  // Percentage of cache reserved for high priority entries.
+  // If greater than zero, the LRU list will be split into a high-pri
+  // list and a low-pri list. High-pri entries will be insert to the
+  // tail of high-pri list, while low-pri entries will be first inserted to
+  // the low-pri list (the midpoint). This is refered to as
+  // midpoint insertion strategy to make entries never get hit in cache
+  // age out faster.
+  //
+  // See also
+  // BlockBasedTableOptions::cache_index_and_filter_blocks_with_high_priority.
+  double high_pri_pool_ratio = 0.5;
+
+  // Whether to use adaptive mutexes for cache shards. Note that adaptive
+  // mutexes need to be supported by the platform in order for this to have any
+  // effect. The default value is true if RocksDB is compiled with
+  // -DROCKSDB_DEFAULT_TO_ADAPTIVE_MUTEX, false otherwise.
+  bool use_adaptive_mutex = kDefaultToAdaptiveMutex;
+
+  LRUCacheOptions() {}
+  LRUCacheOptions(size_t _capacity, int _num_shard_bits,
+                  bool _strict_capacity_limit, double _high_pri_pool_ratio,
+                  std::shared_ptr<MemoryAllocator> _memory_allocator = nullptr,
+                  bool _use_adaptive_mutex = kDefaultToAdaptiveMutex,
+                  CacheMetadataChargePolicy _metadata_charge_policy =
+                      kDefaultCacheMetadataChargePolicy)
+      : ShardedCacheOptions(_capacity, _num_shard_bits, _strict_capacity_limit,
+                            _metadata_charge_policy, _memory_allocator),
+        high_pri_pool_ratio(_high_pri_pool_ratio),
+        use_adaptive_mutex(_use_adaptive_mutex) {}
+};
+
 class LRUCache
 #ifdef NDEBUG
     final
@@ -317,8 +349,9 @@ class LRUCache
            bool use_adaptive_mutex = kDefaultToAdaptiveMutex,
            CacheMetadataChargePolicy metadata_charge_policy =
                kDontChargeCacheMetadata);
+  LRUCache(const LRUCacheOptions& options = LRUCacheOptions());
   virtual ~LRUCache();
-  virtual const char* Name() const override { return "LRUCache"; }
+  virtual const char* Name() const override { return kLRUCacheName.c_str(); }
   virtual CacheShard* GetShard(int shard) override;
   virtual const CacheShard* GetShard(int shard) const override;
   virtual void* Value(Handle* handle) override;
@@ -330,10 +363,13 @@ class LRUCache
   size_t TEST_GetLRUSize();
   //  Retrives high pri pool ratio
   double GetHighPriPoolRatio();
+  Status SetupCache() override;
 
  private:
+  LRUCacheOptions lru_options_;
   LRUCacheShard* shards_ = nullptr;
   int num_shards_ = 0;
 };
+extern std::shared_ptr<Cache> NewLRUCache(const LRUCacheOptions& cache_opts);
 
 }  // namespace rocksdb

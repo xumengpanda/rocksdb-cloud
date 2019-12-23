@@ -4,7 +4,10 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #include "rocksdb/utilities/sim_cache.h"
+
 #include <cstdlib>
+
+#include "cache/lru_cache.h"
 #include "db/db_test_util.h"
 #include "port/stack_trace.h"
 

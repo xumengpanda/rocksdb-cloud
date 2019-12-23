@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "db/db_test_util.h"
+#include "options/options_helper.h"
 #include "port/stack_trace.h"
 #include "rocksdb/perf_context.h"
 #include "table/block_based/filter_policy_internal.h"
@@ -17,11 +18,13 @@ namespace rocksdb {
 namespace {
 using BFP = BloomFilterPolicy;
 
+#ifndef ROCKSDB_LITE
 namespace BFP2 {
 // Extends BFP::Mode with option to use Plain table
 using PseudoMode = int;
 static constexpr PseudoMode kPlainTable = -1;
 }  // namespace BFP2
+#endif  // ROCKSDB_LITE
 }  // namespace
 
 // DB tests related to bloom filter.
@@ -86,13 +89,17 @@ TEST_P(DBBloomFilterTestDefFormatVersion, KeyMayExist) {
     options_override.partition_filters = partition_filters_;
     options_override.metadata_block_size = 32;
     Options options = CurrentOptions(options_override);
-    if (partition_filters_ &&
-        static_cast<BlockBasedTableOptions*>(
-            options.table_factory->GetOptions())
-                ->index_type != BlockBasedTableOptions::kTwoLevelIndexSearch) {
-      // In the current implementation partitioned filters depend on partitioned
-      // indexes
-      continue;
+    if (partition_filters_) {
+      auto* table_options =
+          options.table_factory->GetOptions<BlockBasedTableOptions>(
+              TableFactory::kBlockBasedTableOpts);
+      if (table_options != nullptr &&
+          table_options->index_type !=
+              BlockBasedTableOptions::kTwoLevelIndexSearch) {
+        // In the current implementation partitioned filters depend on
+        // partitioned indexes
+        continue;
+      }
     }
     options.statistics = rocksdb::CreateDBStatistics();
     CreateAndReopenWithCF({"pikachu"}, options);

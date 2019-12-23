@@ -10,12 +10,14 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+
 #include <string>
 #include <vector>
 
 #include "db/dbformat.h"
 #include "db/pinned_iterators_manager.h"
 #include "port/malloc.h"
+#include "rocksdb/cache.h"
 #include "rocksdb/iterator.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"

@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <limits>
 #include <memory>
 #include <string>
@@ -19,10 +20,8 @@
 #include "rocksdb/advanced_options.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/env.h"
-#include "rocksdb/listener.h"
-#include "rocksdb/universal_compaction.h"
+#include "rocksdb/types.h"
 #include "rocksdb/version.h"
-#include "rocksdb/write_buffer_manager.h"
 
 #ifdef max
 #undef max
@@ -36,8 +35,10 @@ class CompactionFilterFactory;
 class Comparator;
 class ConcurrentTaskLimiter;
 class Env;
+class EventListener;
 enum InfoLogLevel : unsigned char;
 class SstFileManager;
+class FileSystem;
 class FilterPolicy;
 class Logger;
 class MergeOperator;
@@ -48,7 +49,8 @@ class Slice;
 class Statistics;
 class InternalKeyComparator;
 class WalFilter;
-class FileSystem;
+class WriteBufferManager;
+struct TableProperties;
 
 // DB contents are stored in a set of blocks, each of which holds a
 // sequence of key,value pairs.  Each block may be compressed before

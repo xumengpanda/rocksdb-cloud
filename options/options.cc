@@ -27,6 +27,7 @@
 #include "rocksdb/table.h"
 #include "rocksdb/table_properties.h"
 #include "rocksdb/wal_filter.h"
+#include "rocksdb/write_buffer_manager.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "util/compression.h"
 
@@ -113,6 +114,7 @@ void DBOptions::Dump(Logger* log) const {
 }  // DBOptions::Dump
 
 void ColumnFamilyOptions::Dump(Logger* log) const {
+  ConfigOptions cfg;
   ROCKS_LOG_HEADER(log, "              Options.comparator: %s",
                    comparator->Name());
   ROCKS_LOG_HEADER(log, "          Options.merge_operator: %s",
@@ -126,8 +128,7 @@ void ColumnFamilyOptions::Dump(Logger* log) const {
                    memtable_factory->Name());
   ROCKS_LOG_HEADER(log, "           Options.table_factory: %s",
                    table_factory->Name());
-  ROCKS_LOG_HEADER(log, "           table_factory options: %s",
-                   table_factory->GetPrintableTableOptions().c_str());
+  table_factory->Dump(log, cfg);
   ROCKS_LOG_HEADER(log, "       Options.write_buffer_size: %" ROCKSDB_PRIszt,
                    write_buffer_size);
   ROCKS_LOG_HEADER(log, " Options.max_write_buffer_number: %d",

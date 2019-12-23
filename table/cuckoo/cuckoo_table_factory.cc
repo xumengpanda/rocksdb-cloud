@@ -7,10 +7,13 @@
 #include "table/cuckoo/cuckoo_table_factory.h"
 
 #include "db/dbformat.h"
+#include "rocksdb/utilities/options_type.h"
 #include "table/cuckoo/cuckoo_table_builder.h"
 #include "table/cuckoo/cuckoo_table_reader.h"
 
 namespace rocksdb {
+const std::string CuckooTableFactory::kCuckooTablePrefix =
+    "rocksdb.table.cuckoo.";
 
 Status CuckooTableFactory::NewTableReader(
     const TableReaderOptions& table_reader_options,
@@ -43,25 +46,35 @@ TableBuilder* CuckooTableFactory::NewTableBuilder(
       column_family_id, table_builder_options.column_family_name);
 }
 
-std::string CuckooTableFactory::GetPrintableTableOptions() const {
-  std::string ret;
-  ret.reserve(2000);
-  const int kBufferSize = 200;
-  char buffer[kBufferSize];
+static std::unordered_map<std::string, OptionTypeInfo> cuckoo_table_type_info =
+    {
+#ifndef ROCKSDB_LITE
+        {"hash_table_ratio",
+         {offsetof(struct CuckooTableOptions, hash_table_ratio),
+          OptionType::kDouble, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone, 0}},
+        {"max_search_depth",
+         {offsetof(struct CuckooTableOptions, max_search_depth),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone, 0}},
+        {"cuckoo_block_size",
+         {offsetof(struct CuckooTableOptions, cuckoo_block_size),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone, 0}},
+        {"identity_as_first_hash",
+         {offsetof(struct CuckooTableOptions, identity_as_first_hash),
+          OptionType::kBoolean, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone, 0}},
+        {"use_module_hash",
+         {offsetof(struct CuckooTableOptions, use_module_hash),
+          OptionType::kBoolean, OptionVerificationType::kNormal,
+          OptionTypeFlags::kNone, 0}},
+#endif  // ROCKSDB_LITE
+};
 
-  snprintf(buffer, kBufferSize, "  hash_table_ratio: %lf\n",
-           table_options_.hash_table_ratio);
-  ret.append(buffer);
-  snprintf(buffer, kBufferSize, "  max_search_depth: %u\n",
-           table_options_.max_search_depth);
-  ret.append(buffer);
-  snprintf(buffer, kBufferSize, "  cuckoo_block_size: %u\n",
-           table_options_.cuckoo_block_size);
-  ret.append(buffer);
-  snprintf(buffer, kBufferSize, "  identity_as_first_hash: %d\n",
-           table_options_.identity_as_first_hash);
-  ret.append(buffer);
-  return ret;
+CuckooTableFactory::CuckooTableFactory(const CuckooTableOptions& table_options)
+    : table_options_(table_options) {
+  RegisterOptions(kCuckooTableOpts, &table_options_, &cuckoo_table_type_info);
 }
 
 TableFactory* NewCuckooTableFactory(const CuckooTableOptions& table_options) {

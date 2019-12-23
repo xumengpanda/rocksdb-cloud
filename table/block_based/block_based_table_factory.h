@@ -14,8 +14,6 @@
 #include <string>
 
 #include "db/dbformat.h"
-#include "options/options_helper.h"
-#include "options/options_parser.h"
 #include "rocksdb/flush_block_policy.h"
 #include "rocksdb/table.h"
 
@@ -42,13 +40,16 @@ class TailPrefetchStats {
 };
 
 class BlockBasedTableFactory : public TableFactory {
+ private:
+  static const std::string kBlockTablePrefix /* = rocksdb.table.block_based */;
+
  public:
   explicit BlockBasedTableFactory(
       const BlockBasedTableOptions& table_options = BlockBasedTableOptions());
 
   ~BlockBasedTableFactory() {}
 
-  const char* Name() const override { return kName.c_str(); }
+  const char* Name() const override { return kBlockBasedTableName.c_str(); }
 
   Status NewTableReader(
       const TableReaderOptions& table_reader_options,
@@ -60,23 +61,27 @@ class BlockBasedTableFactory : public TableFactory {
       const TableBuilderOptions& table_builder_options,
       uint32_t column_family_id, WritableFileWriter* file) const override;
 
-  // Sanitizes the specified DB Options.
-  Status SanitizeOptions(const DBOptions& db_opts,
-                         const ColumnFamilyOptions& cf_opts) const override;
-
-  std::string GetPrintableTableOptions() const override;
-
-  Status GetOptionString(std::string* opt_string,
-                         const std::string& delimiter) const override;
-
-  const BlockBasedTableOptions& table_options() const;
-
-  void* GetOptions() override { return &table_options_; }
+  std::string GetPrintableOptions() const override;
 
   bool IsDeleteRangeSupported() const override { return true; }
 
-  static const std::string kName;
+ protected:
+  const void* GetOptionsPtr(const std::string& name) const override;
+  const std::string& GetOptionsPrefix() const override {
+    return kBlockTablePrefix;
+  }
+  // Validates the specified DB Options.
+  Status Validate(const DBOptions& db_opts,
+                  const ColumnFamilyOptions& cf_opts) const override;
 
+#ifndef ROCKSDB_LITE
+  Status ParseOption(const OptionTypeInfo& opt_info, char* opt_addr,
+                     const std::string& opt_name, const std::string& opt_value,
+                     const ConfigOptions& options) override;
+  const std::unordered_map<std::string, OptionsSanityCheckLevel>*
+  GetOptionsSanityCheckLevel(const std::string& name) const override;
+
+#endif
  private:
   BlockBasedTableOptions table_options_;
   mutable TailPrefetchStats tail_prefetch_stats_;
@@ -87,11 +92,4 @@ extern const std::string kHashIndexPrefixesMetadataBlock;
 extern const std::string kPropTrue;
 extern const std::string kPropFalse;
 
-#ifndef ROCKSDB_LITE
-extern Status VerifyBlockBasedTableFactory(
-    const BlockBasedTableFactory* base_tf,
-    const BlockBasedTableFactory* file_tf,
-    OptionsSanityCheckLevel sanity_check_level);
-
-#endif  // !ROCKSDB_LITE
 }  // namespace rocksdb

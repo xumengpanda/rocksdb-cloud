@@ -23,16 +23,22 @@
 #pragma once
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
-#include "rocksdb/memory_allocator.h"
-#include "rocksdb/slice.h"
-#include "rocksdb/statistics.h"
+
+#include "rocksdb/configurable.h"
 #include "rocksdb/status.h"
 
 namespace rocksdb {
 
 class Cache;
+class MemoryAllocator;
+class Slice;
+class Statistics;
+struct ColumnFamilyOptions;
+struct ConfigOptions;
+struct DBOptions;
 
 extern const bool kDefaultToAdaptiveMutex;
 
@@ -43,64 +49,6 @@ enum CacheMetadataChargePolicy {
 const CacheMetadataChargePolicy kDefaultCacheMetadataChargePolicy =
     kFullChargeCacheMetadata;
 
-struct LRUCacheOptions {
-  // Capacity of the cache.
-  size_t capacity = 0;
-
-  // Cache is sharded into 2^num_shard_bits shards,
-  // by hash of key. Refer to NewLRUCache for further
-  // information.
-  int num_shard_bits = -1;
-
-  // If strict_capacity_limit is set,
-  // insert to the cache will fail when cache is full.
-  bool strict_capacity_limit = false;
-
-  // Percentage of cache reserved for high priority entries.
-  // If greater than zero, the LRU list will be split into a high-pri
-  // list and a low-pri list. High-pri entries will be insert to the
-  // tail of high-pri list, while low-pri entries will be first inserted to
-  // the low-pri list (the midpoint). This is refered to as
-  // midpoint insertion strategy to make entries never get hit in cache
-  // age out faster.
-  //
-  // See also
-  // BlockBasedTableOptions::cache_index_and_filter_blocks_with_high_priority.
-  double high_pri_pool_ratio = 0.5;
-
-  // If non-nullptr will use this allocator instead of system allocator when
-  // allocating memory for cache blocks. Call this method before you start using
-  // the cache!
-  //
-  // Caveat: when the cache is used as block cache, the memory allocator is
-  // ignored when dealing with compression libraries that allocate memory
-  // internally (currently only XPRESS).
-  std::shared_ptr<MemoryAllocator> memory_allocator;
-
-  // Whether to use adaptive mutexes for cache shards. Note that adaptive
-  // mutexes need to be supported by the platform in order for this to have any
-  // effect. The default value is true if RocksDB is compiled with
-  // -DROCKSDB_DEFAULT_TO_ADAPTIVE_MUTEX, false otherwise.
-  bool use_adaptive_mutex = kDefaultToAdaptiveMutex;
-
-  CacheMetadataChargePolicy metadata_charge_policy =
-      kDefaultCacheMetadataChargePolicy;
-
-  LRUCacheOptions() {}
-  LRUCacheOptions(size_t _capacity, int _num_shard_bits,
-                  bool _strict_capacity_limit, double _high_pri_pool_ratio,
-                  std::shared_ptr<MemoryAllocator> _memory_allocator = nullptr,
-                  bool _use_adaptive_mutex = kDefaultToAdaptiveMutex,
-                  CacheMetadataChargePolicy _metadata_charge_policy =
-                      kDefaultCacheMetadataChargePolicy)
-      : capacity(_capacity),
-        num_shard_bits(_num_shard_bits),
-        strict_capacity_limit(_strict_capacity_limit),
-        high_pri_pool_ratio(_high_pri_pool_ratio),
-        memory_allocator(std::move(_memory_allocator)),
-        use_adaptive_mutex(_use_adaptive_mutex),
-        metadata_charge_policy(_metadata_charge_policy) {}
-};
 
 // Create a new cache with a fixed size capacity. The cache is sharded
 // to 2^num_shard_bits shards, by hash of the key. The total capacity
@@ -118,8 +66,6 @@ extern std::shared_ptr<Cache> NewLRUCache(
     CacheMetadataChargePolicy metadata_charge_policy =
         kDefaultCacheMetadataChargePolicy);
 
-extern std::shared_ptr<Cache> NewLRUCache(const LRUCacheOptions& cache_opts);
-
 // Similar to NewLRUCache, but create a cache based on CLOCK algorithm with
 // better concurrent performance in some cases. See util/clock_cache.cc for
 // more detail.
@@ -130,17 +76,22 @@ extern std::shared_ptr<Cache> NewClockCache(
     bool strict_capacity_limit = false,
     CacheMetadataChargePolicy metadata_charge_policy =
         kDefaultCacheMetadataChargePolicy);
-class Cache {
+class Cache : public Configurable {
  public:
+  static const std::string kLRUCacheName;
+  static const std::string kClockCacheName;
   // Depending on implementation, cache entries with high priority could be less
   // likely to get evicted than low priority entries.
   enum class Priority { HIGH, LOW };
 
-  Cache(std::shared_ptr<MemoryAllocator> allocator = nullptr)
-      : memory_allocator_(std::move(allocator)) {}
+  Cache() {}
   // No copying allowed
   Cache(const Cache&) = delete;
   Cache& operator=(const Cache&) = delete;
+
+  static Status CreateFromString(const std::string& id,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<Cache>* cache);
 
   // Destroys all existing entries by calling the "deleter"
   // function that was passed via the Insert() function.
@@ -267,12 +218,11 @@ class Cache {
   // Prerequisite: no entry is referenced.
   virtual void EraseUnRefEntries() = 0;
 
-  virtual std::string GetPrintableOptions() const { return ""; }
-
-  MemoryAllocator* memory_allocator() const { return memory_allocator_.get(); }
-
- private:
-  std::shared_ptr<MemoryAllocator> memory_allocator_;
+  virtual MemoryAllocator* memory_allocator() const { return nullptr; }
+  virtual Status SetupCache() { return Status::OK(); }
+  Status Sanitize(DBOptions&, ColumnFamilyOptions&) override {
+    return SetupCache();
+  }
 };
 
 }  // namespace rocksdb

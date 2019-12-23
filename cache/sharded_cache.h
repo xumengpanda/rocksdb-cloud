@@ -17,6 +17,7 @@
 #include "util/hash.h"
 
 namespace rocksdb {
+class MemoryAllocator;
 
 // Single cache shard interface.
 class CacheShard {
@@ -49,13 +50,48 @@ class CacheShard {
   CacheMetadataChargePolicy metadata_charge_policy_ = kDontChargeCacheMetadata;
 };
 
+struct ShardedCacheOptions {
+  ShardedCacheOptions() {}
+  ShardedCacheOptions(
+      size_t _capacity, int _num_shard_bits, bool _strict_capacity_limit,
+      CacheMetadataChargePolicy _metadata_charge_policy,
+      std::shared_ptr<MemoryAllocator> _memory_allocator = nullptr)
+      : capacity(_capacity),
+        num_shard_bits(_num_shard_bits),
+        strict_capacity_limit(_strict_capacity_limit),
+        metadata_charge_policy(_metadata_charge_policy),
+        memory_allocator(std::move(_memory_allocator)) {}
+
+  // Capacity of the cache.
+  size_t capacity = 0;
+
+  // Cache is sharded into 2^num_shard_bits shards,
+  // by hash of key. Refer to NewLRUCache for further
+  // information.
+  int num_shard_bits = -1;
+
+  // If strict_capacity_limit is set,
+  // insert to the cache will fail when cache is full.
+  bool strict_capacity_limit = false;
+
+  CacheMetadataChargePolicy metadata_charge_policy =
+      kDefaultCacheMetadataChargePolicy;
+  // If non-nullptr will use this allocator instead of system allocator when
+  // allocating memory for cache blocks. Call this method before you start using
+  // the cache!
+  //
+  // Caveat: when the cache is used as block cache, the memory allocator is
+  // ignored when dealing with compression libraries that allocate memory
+  // internally (currently only XPRESS).
+  std::shared_ptr<MemoryAllocator> memory_allocator;
+};
+
 // Generic cache interface which shards cache by hash of keys. 2^num_shard_bits
 // shards will be created, with capacity split evenly to each of the shards.
 // Keys are sharded by the highest num_shard_bits bits of hash value.
 class ShardedCache : public Cache {
  public:
-  ShardedCache(size_t capacity, int num_shard_bits, bool strict_capacity_limit,
-               std::shared_ptr<MemoryAllocator> memory_allocator = nullptr);
+  ShardedCache(ShardedCacheOptions& options);
   virtual ~ShardedCache() = default;
   virtual const char* Name() const override = 0;
   virtual CacheShard* GetShard(int shard) = 0;
@@ -87,22 +123,25 @@ class ShardedCache : public Cache {
   virtual void EraseUnRefEntries() override;
   virtual std::string GetPrintableOptions() const override;
 
-  int GetNumShardBits() const { return num_shard_bits_; }
+  int GetNumShardBits() const { return sharded_options_.num_shard_bits; }
+  MemoryAllocator* memory_allocator() const override {
+    return sharded_options_.memory_allocator.get();
+  }
+
+  Status SetupCache() override;
 
  private:
+  ShardedCacheOptions& sharded_options_;
   static inline uint32_t HashSlice(const Slice& s) {
     return static_cast<uint32_t>(GetSliceNPHash64(s));
   }
 
   uint32_t Shard(uint32_t hash) {
     // Note, hash >> 32 yields hash in gcc, not the zero we expect!
-    return (num_shard_bits_ > 0) ? (hash >> (32 - num_shard_bits_)) : 0;
+    int bits = GetNumShardBits();
+    return (bits > 0) ? (hash >> (32 - bits)) : 0;
   }
-
-  int num_shard_bits_;
   mutable port::Mutex capacity_mutex_;
-  size_t capacity_;
-  bool strict_capacity_limit_;
   std::atomic<uint64_t> last_id_;
 };
 
