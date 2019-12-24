@@ -56,7 +56,7 @@ DBTestBase::DBTestBase(const std::string path)
   if (test_env_uri) {
     Env* test_env = nullptr;
     ConfigOptions cfg(options);
-    Status s = Env::LoadEnv(test_env_uri, cfg, &test_env, &env_guard_);
+    Status s = Env::CreateFromString(test_env_uri, cfg, &test_env, &env_guard_);
     base_env = test_env;
     EXPECT_OK(s);
     EXPECT_NE(Env::Default(), base_env);

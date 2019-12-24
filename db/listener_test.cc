@@ -673,6 +673,7 @@ class TableFileCreationListener : public EventListener {
   class TestEnv : public EnvWrapper {
    public:
     TestEnv() : EnvWrapper(Env::Default()) {}
+    const char *Name() const override { return "TestEnv"; }
 
     void SetStatus(Status s) { status_ = s; }
 

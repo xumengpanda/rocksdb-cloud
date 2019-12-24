@@ -49,6 +49,8 @@ class HdfsEnv : public Env {
     fileSys_ = connectToPath(fsname_);
   }
 
+  const char *Name() const override { return "HDFSEnv"; }
+
   virtual ~HdfsEnv() {
     fprintf(stderr, "Destroying HdfsEnv::Default()\n");
     hdfsDisconnect(fileSys_);
@@ -247,6 +249,8 @@ class HdfsEnv : public Env {
     fprintf(stderr, "Please see hdfs/README for details\n");
     abort();
   }
+
+  const char *Name() const override { return "HDFSEnv"; }
 
   virtual ~HdfsEnv() {
   }

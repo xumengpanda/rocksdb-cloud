@@ -357,26 +357,17 @@ static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
         return true;  // rate_limiter is not compared.
       }}},
     {"env",
-     {offsetof(struct DBOptions, env), OptionType::kUnknown,
-      OptionVerificationType::kNormal, OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string& value,
-         const ConfigOptions& opts, char* addr) {
-        Env* env = *(reinterpret_cast<Env**>(addr));
-        Status s = Env::LoadEnv(value, opts, &env);
-        if (s.ok()) {
-          *(reinterpret_cast<Env**>(addr)) = env;
-        }
-        return Status::OK();
-      },
-      [](const std::string&, const char*, const ConfigOptions&,
-         std::string* value) {
-        *value = "";  // Currently not checked
-        return Status::OK();
-      },
-      [](const std::string&, const char*, const char*, const ConfigOptions&,
-         std::string*) {
-        return true;  // env is not compared.
-      }}},
+     //**TODO: This should be a std::shared_ptr<Env>, as any environment we
+     // load this way is likely to be leaked.
+     OptionTypeInfo::AsCustomP<Env>(
+           offsetof(struct DBOptions, env), 
+           OptionVerificationType::kNormal,
+           nullptr, 
+           [](const std::string&, const char*, const char*, const ConfigOptions&,
+              std::string*) {
+             return true;  // env is not compared.
+           })
+    },
     {"statistics", OptionTypeInfo::AsCustomS<Statistics>(
                        offsetof(struct DBOptions, statistics),
                        OptionVerificationType::kByNameAllowFromNull, nullptr,

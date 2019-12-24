@@ -1784,6 +1784,7 @@ class TestEnv : public EnvWrapper {
   public:
     explicit TestEnv() : EnvWrapper(Env::Default()),
                 close_count(0) { }
+  const char *Name() const override { return "TestEnv"; }
 
   class TestLogger : public Logger {
    public:

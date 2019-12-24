@@ -1305,6 +1305,7 @@ struct ReportFileOpCounters {
 class ReportFileOpEnv : public EnvWrapper {
  public:
   explicit ReportFileOpEnv(Env* base) : EnvWrapper(base) { reset(); }
+  const char *Name() const override { return "ReportFileOpEnv"; }
 
   void reset() {
     counters_.open_counter_ = 0;
@@ -6804,7 +6805,7 @@ int db_bench_tool(int argc, char** argv) {
     exit(1);
   } else if (!FLAGS_env_uri.empty()) {
     ConfigOptions opts;
-    Status s = Env::LoadEnv(FLAGS_env_uri, opts, &FLAGS_env, &env_guard);
+    Status s = Env::CreateFromString(FLAGS_env_uri, opts, &FLAGS_env, &env_guard);
     if (FLAGS_env == nullptr) {
       fprintf(stderr, "No Env registered for URI: %s\n", FLAGS_env_uri.c_str());
       exit(1);

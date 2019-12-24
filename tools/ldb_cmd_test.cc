@@ -29,7 +29,7 @@ class LdbCmdTest : public testing::Test {
       return Env::Default();
     }
     Env* env = Env::Default();
-    Env::LoadEnv(test_env_uri, ConfigOptions(), &env, &env_guard_);
+    Env::CreateFromString(test_env_uri, ConfigOptions(), &env, &env_guard_);
     return env;
   }
 

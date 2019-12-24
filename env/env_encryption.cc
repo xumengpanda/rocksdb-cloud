@@ -378,6 +378,8 @@ class EncryptedEnv : public EnvWrapper {
       : EnvWrapper(base_env) {
     provider_ = provider;
   }
+  
+  const char *Name() const override { return "EncryptedEnv"; }
 
   // NewSequentialFile opens a file for sequential reading.
   Status NewSequentialFile(const std::string& fname,

@@ -30,8 +30,8 @@ Status Env::NewLogger(const std::string& fname,
   return NewEnvLogger(fname, this, result);
 }
 
-Status Env::LoadEnv(const std::string& value, const ConfigOptions& options,
-                    Env** result) {
+Status Env::CreateFromString(const std::string& value, const ConfigOptions& options,
+                             Env** result) {
   Env* env = *result;
   Status s;
 #ifndef ROCKSDB_LITE
@@ -46,8 +46,8 @@ Status Env::LoadEnv(const std::string& value, const ConfigOptions& options,
   return s;
 }
 
-Status Env::LoadEnv(const std::string& value, const ConfigOptions& options,
-                    Env** result, std::shared_ptr<Env>* guard) {
+Status Env::CreateFromString(const std::string& value, const ConfigOptions& options,
+                             Env** result, std::shared_ptr<Env>* guard) {
   assert(result);
   Status s;
 #ifndef ROCKSDB_LITE
@@ -402,6 +402,19 @@ Status ReadFileToString(Env* env, const std::string& fname, std::string* data) {
   }
   delete[] space;
   return s;
+}
+
+static OptionTypeMap env_target_type_info = {
+#ifndef ROCKSDB_LITE
+    {"target",
+     OptionTypeInfo::AsCustomP<Env>(0, OptionVerificationType::kByName)
+    },
+#endif  // !ROCKSDB_LITE
+};
+
+EnvWrapper::EnvWrapper(Env* t) 
+  : target_(t) {
+  RegisterOptions("WrappedOptions", &target_, &env_target_type_info);
 }
 
 EnvWrapper::~EnvWrapper() {

@@ -833,6 +833,8 @@ TEST_F(OptionsTest, GetOptionsFromStringTest) {
   class CustomEnv : public EnvWrapper {
    public:
     explicit CustomEnv(Env* _target) : EnvWrapper(_target) {}
+    const char *Name() const override { return "CustomEnv"; }
+    
   };
 
   ObjectLibrary::Default()->Register<Env>(
@@ -883,7 +885,7 @@ TEST_F(OptionsTest, GetOptionsFromStringTest) {
   ASSERT_TRUE(new_options.rate_limiter.get() != nullptr);
   Env* newEnv = new_options.env;
   ConfigOptions cfg(new_options);
-  ASSERT_OK(Env::LoadEnv(kCustomEnvName, cfg, &newEnv));
+  ASSERT_OK(Env::CreateFromString(kCustomEnvName, cfg, &newEnv));
   ASSERT_EQ(newEnv, new_options.env);
 }
 

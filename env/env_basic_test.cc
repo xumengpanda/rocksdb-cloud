@@ -21,6 +21,7 @@ namespace rocksdb {
 class NormalizingEnvWrapper : public EnvWrapper {
  public:
   explicit NormalizingEnvWrapper(Env* base) : EnvWrapper(base) {}
+  const char *Name() const override { return "NormalizingEnv"; }
 
   // Removes . and .. from directory listing
   Status GetChildren(const std::string& dir,
@@ -110,7 +111,7 @@ std::vector<Env*> GetCustomEnvs() {
     const char* uri = getenv("TEST_ENV_URI");
     if (uri != nullptr) {
       ConfigOptions cfg;
-      Env::LoadEnv(uri, cfg, &custom_env);
+      Env::CreateFromString(uri, cfg, &custom_env);
     }
   }
 

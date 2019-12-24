@@ -207,6 +207,7 @@ class SpecialSkipListFactory : public MemTableRepFactory {
 class SpecialEnv : public EnvWrapper {
  public:
   explicit SpecialEnv(Env* base);
+  const char *Name() const override { return "SpecialEnv"; }
 
   Status NewWritableFile(const std::string& f, std::unique_ptr<WritableFile>* r,
                          const EnvOptions& soptions) override {

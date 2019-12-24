@@ -46,6 +46,7 @@ class EnvCounter : public EnvWrapper {
  public:
   explicit EnvCounter(Env* base)
       : EnvWrapper(base), num_new_writable_file_(0) {}
+  const char *Name() const override { return "CounterEnv"; }
   int GetNumberOfNewWritableFileCalls() {
     return num_new_writable_file_;
   }
@@ -68,7 +69,7 @@ class ColumnFamilyTestBase : public testing::Test {
     if (test_env_uri) {
       ConfigOptions opts(db_options_);
       Env* test_env = nullptr;
-      Status s = Env::LoadEnv(test_env_uri, opts, &test_env, &env_guard_);
+      Status s = Env::CreateFromString(test_env_uri, opts, &test_env, &env_guard_);
       base_env = test_env;
       EXPECT_OK(s);
       EXPECT_NE(Env::Default(), base_env);

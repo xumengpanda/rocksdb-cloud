@@ -627,7 +627,7 @@ int SSTDumpTool::Run(int argc, char** argv, Options options) {
   if (!options.env || options.env == rocksdb::Env::Default()) {
     ConfigOptions cfg;
     Env* env = Env::Default();
-    Status s = Env::LoadEnv(env_uri ? env_uri : "", cfg, &env, &env_guard);
+    Status s = Env::CreateFromString(env_uri ? env_uri : "", cfg, &env, &env_guard);
     if (!s.ok() && !s.IsNotFound()) {
       fprintf(stderr, "LoadEnv: %s\n", s.ToString().c_str());
       exit(1);

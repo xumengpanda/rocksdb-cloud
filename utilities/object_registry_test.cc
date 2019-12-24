@@ -17,6 +17,12 @@ class EnvRegistryTest : public testing::Test {
 
 int EnvRegistryTest::num_a = 0;
 int EnvRegistryTest::num_b = 0;
+class CustomEnv: public EnvWrapper {
+public:
+  CustomEnv(Env *t) : EnvWrapper(t) { }
+  const char *Name() const override { return "CustomEnv"; }
+};
+  
 static FactoryFunc<Env> test_reg_a = ObjectLibrary::Default()->Register<Env>(
     "a://.*",
     [](const std::string& /*uri*/, std::unique_ptr<Env>* /*env_guard*/,
@@ -31,7 +37,7 @@ static FactoryFunc<Env> test_reg_b = ObjectLibrary::Default()->Register<Env>(
       ++EnvRegistryTest::num_b;
       // Env::Default() is a singleton so we can't grant ownership directly to
       // the caller - we must wrap it first.
-      env_guard->reset(new EnvWrapper(Env::Default()));
+      env_guard->reset(new CustomEnv(Env::Default()));
       return env_guard->get();
     });
 
@@ -112,7 +118,7 @@ TEST_F(EnvRegistryTest, CheckShared) {
   library->Register<Env>(
       "guarded", [](const std::string& /*uri*/, std::unique_ptr<Env>* guard,
                     std::string* /* errmsg */) {
-        guard->reset(new EnvWrapper(Env::Default()));
+        guard->reset(new CustomEnv(Env::Default()));
         return guard->get();
       });
 
@@ -135,7 +141,7 @@ TEST_F(EnvRegistryTest, CheckStatic) {
   library->Register<Env>(
       "guarded", [](const std::string& /*uri*/, std::unique_ptr<Env>* guard,
                     std::string* /* errmsg */) {
-        guard->reset(new EnvWrapper(Env::Default()));
+        guard->reset(new CustomEnv(Env::Default()));
         return guard->get();
       });
 
@@ -159,7 +165,7 @@ TEST_F(EnvRegistryTest, CheckUnique) {
   library->Register<Env>(
       "guarded", [](const std::string& /*uri*/, std::unique_ptr<Env>* guard,
                     std::string* /* errmsg */) {
-        guard->reset(new EnvWrapper(Env::Default()));
+        guard->reset(new CustomEnv(Env::Default()));
         return guard->get();
       });
 
