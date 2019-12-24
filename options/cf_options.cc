@@ -15,6 +15,7 @@
 #include "options/options_parser.h"
 #include "port/port.h"
 #include "rocksdb/cache.h"
+#include "rocksdb/compaction_filter.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/concurrent_task_limiter.h"
 #include "rocksdb/configurable.h"
@@ -122,6 +123,7 @@ static std::unordered_map<std::string, OptionTypeInfo> cf_options_type_info = {
                                      uint34_t* existing_value_size,
                                      Slice delta_value,
                                      std::string* merged_value);
+    std::shared_ptr<ConcurrentTaskLimiter> compaction_thread_limiter;
     std::vector<DbPath> cf_paths;
      */
     {"report_bg_io_stats",
@@ -378,16 +380,28 @@ static std::unordered_map<std::string, OptionTypeInfo> cf_options_type_info = {
         return true;  // Not compared.
       }}},
     {kNameComparator,
-     {offset_of(&ColumnFamilyOptions::comparator), OptionType::kComparator,
-      OptionVerificationType::kByName, OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string& value,
-         const ConfigOptions& opts, char* addr) {
-        // Try to get comparator from object registry first.
-        const auto comp = reinterpret_cast<const Comparator**>(addr);
-        Status status =
-            opts.registry->NewStaticObject<const Comparator>(value, comp);
-        return Status::OK();
-      }}},
+     OptionTypeInfo::AsCustomP<const Comparator>(
+         offset_of(&ColumnFamilyOptions::comparator),
+         OptionVerificationType::kByName,
+         [](const std::string&, const char* addr, const ConfigOptions&,
+            std::string* value) {
+           // it's a const pointer of const Comparator*
+           const auto* ptr = reinterpret_cast<const Comparator* const*>(addr);
+           // Since the user-specified comparator will be wrapped by
+           // InternalKeyComparator, we should persist the user-specified one
+           // instead of InternalKeyComparator.
+           if (*ptr == nullptr) {
+             *value = kNullptrString;
+           } else {
+             const Comparator* root_comp = (*ptr)->GetRootComparator();
+             if (root_comp == nullptr) {
+               root_comp = (*ptr);
+             }
+             *value = root_comp->Name();
+           }
+           return Status::OK();
+         },
+         nullptr)},
     {"prefix_extractor",
      {offset_of(&ColumnFamilyOptions::prefix_extractor),
       OptionType::kSliceTransform, OptionVerificationType::kByNameAllowNull,
@@ -398,37 +412,18 @@ static std::unordered_map<std::string, OptionTypeInfo> cf_options_type_info = {
           &ColumnFamilyOptions::memtable_insert_with_hint_prefix_extractor),
       OptionType::kSliceTransform, OptionVerificationType::kByNameAllowNull,
       OptionTypeFlags::kNone, 0}},
-    {"memtable_factory",
-     {offset_of(&ColumnFamilyOptions::memtable_factory),
-      OptionType::kMemTableRepFactory, OptionVerificationType::kByName,
-      OptionTypeFlags::kNone, 0,
-      [](const std::string& name, const std::string& value,
-         const ConfigOptions&, char* addr) {
-        std::unique_ptr<MemTableRepFactory> factory;
-        Status mem_factory_s = GetMemTableRepFactoryFromString(value, &factory);
-        if (!mem_factory_s.ok()) {
-          return Status::InvalidArgument(
-              "unable to parse the specified CF option " + name);
-        }
-        (reinterpret_cast<std::shared_ptr<MemTableRepFactory>*>(addr))
-            ->reset(factory.release());
-        return Status::OK();
-      }}},
+    {"memtable_factory", OptionTypeInfo::AsCustomS<MemTableRepFactory>(
+                             offset_of(&ColumnFamilyOptions::memtable_factory),
+                             OptionVerificationType::kByName)},
     {"memtable",
      {offset_of(&ColumnFamilyOptions::memtable_factory),
-      OptionType::kMemTableRepFactory, OptionVerificationType::kAlias,
-      OptionTypeFlags::kNone, 0,
-      [](const std::string& name, const std::string& value,
-         const ConfigOptions&, char* addr) {
-        std::unique_ptr<MemTableRepFactory> factory;
-        Status mem_factory_s = GetMemTableRepFactoryFromString(value, &factory);
-        if (!mem_factory_s.ok()) {
-          return Status::InvalidArgument(
-              "unable to parse the specified CF option " + name);
-        }
-        (reinterpret_cast<std::shared_ptr<MemTableRepFactory>*>(addr))
-            ->reset(factory.release());
-        return Status::OK();
+      OptionType::kCustomizable, OptionVerificationType::kAlias,
+      OptionTypeFlags::kCustomizableS, 0,
+      [](const std::string&, const std::string& value,
+         const ConfigOptions& opts, char* addr) {
+        auto* factory =
+            reinterpret_cast<std::shared_ptr<MemTableRepFactory>*>(addr);
+        return MemTableRepFactory::CreateFromString(value, opts, factory);
       }}},
     {"table_factory", OptionTypeInfo::AsCustomS<TableFactory>(
                           offset_of(&ColumnFamilyOptions::table_factory),
@@ -460,31 +455,16 @@ static std::unordered_map<std::string, OptionTypeInfo> cf_options_type_info = {
         return s;
       }}},
     {"compaction_filter",
-     {offset_of(&ColumnFamilyOptions::compaction_filter),
-      OptionType::kCompactionFilter, OptionVerificationType::kByName,
-      OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string&, const ConfigOptions&, char*) {
-        return Status::OK();  // Ignored at the moment during parse
-      }}},
+     OptionTypeInfo::AsCustomP<const CompactionFilter>(
+         offset_of(&ColumnFamilyOptions::compaction_filter),
+         OptionVerificationType::kByName)},
     {"compaction_filter_factory",
-     {offset_of(&ColumnFamilyOptions::compaction_filter_factory),
-      OptionType::kCompactionFilterFactory, OptionVerificationType::kByName,
-      OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string&, const ConfigOptions&, char*) {
-        return Status::OK();  // Ignored at the moment during parse
-      }}},
-    {kNameMergeOperator,
-     {offset_of(&ColumnFamilyOptions::merge_operator),
-      OptionType::kMergeOperator, OptionVerificationType::kByNameAllowFromNull,
-      OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string& value,
-         const ConfigOptions& opts, char* addr) {
-        // Try to get merge operator from object registry first.
-        auto* mo = reinterpret_cast<std::shared_ptr<MergeOperator>*>(addr);
-        Status status =
-            opts.registry->NewSharedObject<MergeOperator>(value, mo);
-        return Status::OK();
-      }}},
+     OptionTypeInfo::AsCustomS<CompactionFilterFactory>(
+         offset_of(&ColumnFamilyOptions::compaction_filter_factory),
+         OptionVerificationType::kByName)},
+    {kNameMergeOperator, OptionTypeInfo::AsCustomS<MergeOperator>(
+                             offset_of(&ColumnFamilyOptions::merge_operator),
+                             OptionVerificationType::kByNameAllowFromNull)},
     {"compaction_style",
      {offset_of(&ColumnFamilyOptions::compaction_style),
       OptionType::kCompactionStyle, OptionVerificationType::kNormal,

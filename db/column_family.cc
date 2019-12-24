@@ -27,7 +27,6 @@
 #include "db/version_set.h"
 #include "db/write_controller.h"
 #include "file/sst_file_manager_impl.h"
-#include "memtable/hash_skiplist_rep.h"
 #include "monitoring/thread_status_util.h"
 #include "options/options_helper.h"
 #include "port/port.h"
@@ -346,7 +345,7 @@ ColumnFamilyOptions SanitizeOptions(const ImmutableDBOptions& db_options,
   }
 
   bool is_block_based_table =
-      (result.table_factory->Name() == BlockBasedTableFactory().Name());
+      (result.table_factory->Name() == TableFactory::kBlockBasedTableName);
 
   const uint64_t kAdjustedTtl = 30 * 24 * 60 * 60;
   if (result.ttl == kDefaultTtl) {

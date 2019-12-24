@@ -7,8 +7,11 @@
 #include "table/plain/plain_table_factory.h"
 
 #include <stdint.h>
+
 #include <memory>
+
 #include "db/dbformat.h"
+#include "options/customizable_helper.h"
 #include "options/options_helper.h"
 #include "port/port.h"
 #include "rocksdb/convenience.h"
@@ -115,27 +118,20 @@ std::string PlainTableFactory::GetPrintableOptions() const {
   return ret;
 }
 
-Status GetMemTableRepFactoryFromString(
-    const std::string& opts_str,
-    std::unique_ptr<MemTableRepFactory>* new_mem_factory) {
+static bool LoadMemTableRepFactory(
+    const std::string& opts_str, std::unique_ptr<MemTableRepFactory>* factory) {
   std::vector<std::string> opts_list = StringSplit(opts_str, ':');
   size_t len = opts_list.size();
-
   if (opts_list.empty() || opts_list.size() > 2) {
-    return Status::InvalidArgument("Can't parse memtable_factory option ",
-                                   opts_str);
-  }
-
-  MemTableRepFactory* mem_factory = nullptr;
-
-  if (opts_list[0] == "skip_list" || opts_list[0] == "SkipListFactory") {
+    return false;
+  } else if (opts_list[0] == "skip_list" || opts_list[0] == "SkipListFactory") {
     // Expecting format
     // skip_list:<lookahead>
     if (2 == len) {
       size_t lookahead = ParseSizeT(opts_list[1]);
-      mem_factory = new SkipListFactory(lookahead);
-    } else if (1 == len) {
-      mem_factory = new SkipListFactory();
+      factory->reset(new SkipListFactory(lookahead));
+    } else {
+      factory->reset(new SkipListFactory());
     }
   } else if (opts_list[0] == "prefix_hash" ||
              opts_list[0] == "HashSkipListRepFactory") {
@@ -143,9 +139,9 @@ Status GetMemTableRepFactoryFromString(
     // prfix_hash:<hash_bucket_count>
     if (2 == len) {
       size_t hash_bucket_count = ParseSizeT(opts_list[1]);
-      mem_factory = NewHashSkipListRepFactory(hash_bucket_count);
-    } else if (1 == len) {
-      mem_factory = NewHashSkipListRepFactory();
+      factory->reset(NewHashSkipListRepFactory(hash_bucket_count));
+    } else {
+      factory->reset(NewHashSkipListRepFactory());
     }
   } else if (opts_list[0] == "hash_linkedlist" ||
              opts_list[0] == "HashLinkListRepFactory") {
@@ -153,32 +149,56 @@ Status GetMemTableRepFactoryFromString(
     // hash_linkedlist:<hash_bucket_count>
     if (2 == len) {
       size_t hash_bucket_count = ParseSizeT(opts_list[1]);
-      mem_factory = NewHashLinkListRepFactory(hash_bucket_count);
-    } else if (1 == len) {
-      mem_factory = NewHashLinkListRepFactory();
+      factory->reset(NewHashLinkListRepFactory(hash_bucket_count));
+    } else {
+      factory->reset(NewHashLinkListRepFactory());
     }
   } else if (opts_list[0] == "vector" || opts_list[0] == "VectorRepFactory") {
     // Expecting format
     // vector:<count>
     if (2 == len) {
       size_t count = ParseSizeT(opts_list[1]);
-      mem_factory = new VectorRepFactory(count);
-    } else if (1 == len) {
-      mem_factory = new VectorRepFactory();
+      factory->reset(new VectorRepFactory(count));
+    } else {
+      factory->reset(new VectorRepFactory());
     }
-  } else if (opts_list[0] == "cuckoo") {
-    return Status::NotSupported(
-        "cuckoo hash memtable is not supported anymore.");
   } else {
-    return Status::InvalidArgument("Unrecognized memtable_factory option ",
-                                   opts_str);
+    return false;
   }
 
-  if (mem_factory != nullptr) {
-    new_mem_factory->reset(mem_factory);
-  }
+  return true;
+}
 
-  return Status::OK();
+Status GetMemTableRepFactoryFromString(
+    const std::string& opts_str,
+    std::unique_ptr<MemTableRepFactory>* new_mem_factory) {
+  if (LoadMemTableRepFactory(opts_str, new_mem_factory)) {
+    return Status::OK();
+  } else {
+    std::vector<std::string> opts_list = StringSplit(opts_str, ':');
+    if (opts_list.empty() || opts_list.size() > 2) {
+      return Status::InvalidArgument("Can't parse memtable_factory option ",
+                                     opts_str);
+    } else if (opts_list[0] == "cuckoo") {
+      return Status::NotSupported(
+          "cuckoo hash memtable is not supported anymore.");
+    } else {
+      return Status::InvalidArgument("Unrecognized memtable_factory option ",
+                                     opts_str);
+    }
+  }
+}
+
+Status MemTableRepFactory::CreateFromString(
+    const std::string& opts_str, const ConfigOptions& cfg_opts,
+    std::shared_ptr<MemTableRepFactory>* result) {
+  std::unique_ptr<MemTableRepFactory> factory;
+  Status s = LoadUniqueObject<MemTableRepFactory>(
+      opts_str, LoadMemTableRepFactory, cfg_opts, &factory);
+  if (s.ok()) {
+    result->reset(factory.release());
+  }
+  return s;
 }
 
 extern TableFactory* NewPlainTableFactory(const PlainTableOptions& options) {

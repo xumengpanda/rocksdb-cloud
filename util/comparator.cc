@@ -8,21 +8,28 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "rocksdb/comparator.h"
+
 #include <stdint.h>
+
 #include <algorithm>
 #include <memory>
+
 #include "logging/logging.h"
+#include "options/customizable_helper.h"
 #include "port/port.h"
+#include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 
 namespace rocksdb {
-
+static const std::string kBytewiseComparator = "leveldb.BytewiseComparator";
+static const std::string kReverseComparator =
+    "rocksdb.ReverseBytewiseComparator";
 namespace {
 class BytewiseComparatorImpl : public Comparator {
  public:
   BytewiseComparatorImpl() { }
 
-  const char* Name() const override { return "leveldb.BytewiseComparator"; }
+  const char* Name() const override { return kBytewiseComparator.c_str(); }
 
   int Compare(const Slice& a, const Slice& b) const override {
     return a.compare(b);
@@ -134,9 +141,7 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
  public:
   ReverseBytewiseComparatorImpl() { }
 
-  const char* Name() const override {
-    return "rocksdb.ReverseBytewiseComparator";
-  }
+  const char* Name() const override { return kReverseComparator.c_str(); }
 
   int Compare(const Slice& a, const Slice& b) const override {
     return -a.compare(b);
@@ -211,6 +216,25 @@ const Comparator* BytewiseComparator() {
 const Comparator* ReverseBytewiseComparator() {
   static ReverseBytewiseComparatorImpl rbytewise;
   return &rbytewise;
+}
+
+static bool LoadComparator(const std::string& id, Comparator** result) {
+  bool success = true;
+  if (id == kBytewiseComparator) {
+    *result = const_cast<Comparator*>(BytewiseComparator());
+  } else if (id == kReverseComparator) {
+    *result = const_cast<Comparator*>(ReverseBytewiseComparator());
+  } else {
+    success = false;
+  }
+  return success;
+}
+
+Status Comparator::CreateFromString(const std::string& value,
+                                    const ConfigOptions& opts,
+                                    const Comparator** result) {
+  Comparator** comparator = const_cast<Comparator**>(result);
+  return LoadStaticObject<Comparator>(value, LoadComparator, opts, comparator);
 }
 
 }  // namespace rocksdb

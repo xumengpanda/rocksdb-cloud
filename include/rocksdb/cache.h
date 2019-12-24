@@ -27,7 +27,7 @@
 #include <memory>
 #include <string>
 
-#include "rocksdb/configurable.h"
+#include "rocksdb/customizable.h"
 #include "rocksdb/status.h"
 
 namespace rocksdb {
@@ -76,7 +76,7 @@ extern std::shared_ptr<Cache> NewClockCache(
     bool strict_capacity_limit = false,
     CacheMetadataChargePolicy metadata_charge_policy =
         kDefaultCacheMetadataChargePolicy);
-class Cache : public Configurable {
+class Cache : public Customizable {
  public:
   static const std::string kLRUCacheName;
   static const std::string kClockCacheName;
@@ -89,6 +89,7 @@ class Cache : public Configurable {
   Cache(const Cache&) = delete;
   Cache& operator=(const Cache&) = delete;
 
+  static const char* Type() { return "Cache"; }
   static Status CreateFromString(const std::string& id,
                                  const ConfigOptions& opts,
                                  std::shared_ptr<Cache>* cache);
@@ -101,9 +102,6 @@ class Cache : public Configurable {
 
   // Opaque handle to an entry stored in the cache.
   struct Handle {};
-
-  // The type of the Cache
-  virtual const char* Name() const = 0;
 
   // Insert a mapping from key->value into the cache and assign it
   // the specified charge against the total cache capacity.

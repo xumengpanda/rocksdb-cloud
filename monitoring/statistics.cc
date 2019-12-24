@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+
+#include "options/customizable_helper.h"
 #include "port/likely.h"
 #include "rocksdb/statistics.h"
 
@@ -233,8 +235,29 @@ std::shared_ptr<Statistics> CreateDBStatistics() {
   return std::make_shared<StatisticsImpl>(nullptr);
 }
 
+Status Statistics::CreateFromString(const std::string& id,
+                                    const ConfigOptions& opts,
+                                    std::shared_ptr<Statistics>* result) {
+  Status s;
+  if (id == "" || id == "BasicStatistics") {
+    result->reset(new StatisticsImpl(nullptr));
+  } else {
+    s = LoadSharedObject<Statistics>(id, nullptr, opts, result);
+  }
+  return s;
+}
+
+static OptionTypeMap stats_type_info = {
+#ifndef ROCKSDB_LITE
+    {"inner", OptionTypeInfo::AsCustomS<Statistics>(
+                  0, OptionVerificationType::kByNameAllowFromNull)},
+#endif  // !ROCKSDB_LITE
+};
+
 StatisticsImpl::StatisticsImpl(std::shared_ptr<Statistics> stats)
-    : stats_(std::move(stats)) {}
+    : stats_(std::move(stats)) {
+  RegisterOptions("StatisticsOptions", &stats_, &stats_type_info);
+}
 
 StatisticsImpl::~StatisticsImpl() {}
 

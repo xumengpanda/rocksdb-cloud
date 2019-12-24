@@ -13,8 +13,9 @@
 #include <string>
 #include <vector>
 
-namespace rocksdb {
+#include "rocksdb/customizable.h"
 
+namespace rocksdb {
 class Slice;
 class SliceTransform;
 
@@ -30,7 +31,7 @@ struct CompactionFilterContext {
 // CompactionFilter allows an application to modify/delete a key-value at
 // the time of compaction.
 
-class CompactionFilter {
+class CompactionFilter : public Customizable {
  public:
   enum ValueType {
     kValue,
@@ -57,6 +58,11 @@ class CompactionFilter {
     // Which column family this compaction is for.
     uint32_t column_family_id;
   };
+
+  static const char* Type() { return "CompactionFilter"; }
+  static Status CreateFromString(const std::string& name,
+                                 const ConfigOptions& opts,
+                                 const CompactionFilter** result);
 
   virtual ~CompactionFilter() {}
 
@@ -196,9 +202,14 @@ class CompactionFilter {
 
 // Each compaction will create a new CompactionFilter allowing the
 // application to know about different compactions
-class CompactionFilterFactory {
+class CompactionFilterFactory : public Customizable {
  public:
   virtual ~CompactionFilterFactory() {}
+
+  static const char* Type() { return "CompactionFilterFactory"; }
+  static Status CreateFromString(
+      const std::string& name, const ConfigOptions& opts,
+      std::shared_ptr<CompactionFilterFactory>* result);
 
   virtual std::unique_ptr<CompactionFilter> CreateCompactionFilter(
       const CompactionFilter::Context& context) = 0;

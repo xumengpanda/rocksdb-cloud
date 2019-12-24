@@ -16,7 +16,6 @@
 namespace rocksdb {
 
 namespace {
-using BFP = BloomFilterPolicy;
 
 #ifndef ROCKSDB_LITE
 namespace BFP2 {
@@ -34,12 +33,13 @@ class DBBloomFilterTest : public DBTestBase {
   DBBloomFilterTest() : DBTestBase("/db_bloom_filter_test") {}
 };
 
-class DBBloomFilterTestWithParam : public DBTestBase,
-                                   public testing::WithParamInterface<
-                                       std::tuple<BFP::Mode, bool, uint32_t>> {
+class DBBloomFilterTestWithParam
+    : public DBTestBase,
+      public testing::WithParamInterface<
+          std::tuple<BloomFilterOptions::Mode, bool, uint32_t>> {
   //                             public testing::WithParamInterface<bool> {
  protected:
-  BFP::Mode bfp_impl_;
+  BloomFilterOptions::Mode bfp_impl_;
   bool partition_filters_;
   uint32_t format_version_;
 
@@ -85,7 +85,7 @@ TEST_P(DBBloomFilterTestDefFormatVersion, KeyMayExist) {
     ReadOptions ropts;
     std::string value;
     anon::OptionsOverride options_override;
-    options_override.filter_policy.reset(new BFP(20, bfp_impl_));
+    options_override.filter_policy.reset(new BloomFilterPolicy(20, bfp_impl_));
     options_override.partition_filters = partition_filters_;
     options_override.metadata_block_size = 32;
     Options options = CurrentOptions(options_override);
@@ -449,7 +449,7 @@ TEST_P(DBBloomFilterTestWithParam, BloomFilter) {
     // trigger reset of table_factory
     BlockBasedTableOptions table_options;
     table_options.no_block_cache = true;
-    table_options.filter_policy.reset(new BFP(10, bfp_impl_));
+    table_options.filter_policy.reset(new BloomFilterPolicy(10, bfp_impl_));
     table_options.partition_filters = partition_filters_;
     if (partition_filters_) {
       table_options.index_type =
@@ -518,27 +518,30 @@ TEST_P(DBBloomFilterTestWithParam, BloomFilter) {
 #ifndef ROCKSDB_VALGRIND_RUN
 INSTANTIATE_TEST_CASE_P(
     FormatDef, DBBloomFilterTestDefFormatVersion,
-    ::testing::Values(
-        std::make_tuple(BFP::kDeprecatedBlock, false,
-                        test::kDefaultFormatVersion),
-        std::make_tuple(BFP::kAuto, true, test::kDefaultFormatVersion),
-        std::make_tuple(BFP::kAuto, false, test::kDefaultFormatVersion)));
+    ::testing::Values(std::make_tuple(BloomFilterOptions::kDeprecatedBlock,
+                                      false, test::kDefaultFormatVersion),
+                      std::make_tuple(BloomFilterOptions::kAuto, true,
+                                      test::kDefaultFormatVersion),
+                      std::make_tuple(BloomFilterOptions::kAuto, false,
+                                      test::kDefaultFormatVersion)));
 
 INSTANTIATE_TEST_CASE_P(
     FormatDef, DBBloomFilterTestWithParam,
-    ::testing::Values(
-        std::make_tuple(BFP::kDeprecatedBlock, false,
-                        test::kDefaultFormatVersion),
-        std::make_tuple(BFP::kAuto, true, test::kDefaultFormatVersion),
-        std::make_tuple(BFP::kAuto, false, test::kDefaultFormatVersion)));
+    ::testing::Values(std::make_tuple(BloomFilterOptions::kDeprecatedBlock,
+                                      false, test::kDefaultFormatVersion),
+                      std::make_tuple(BloomFilterOptions::kAuto, true,
+                                      test::kDefaultFormatVersion),
+                      std::make_tuple(BloomFilterOptions::kAuto, false,
+                                      test::kDefaultFormatVersion)));
 
 INSTANTIATE_TEST_CASE_P(
     FormatLatest, DBBloomFilterTestWithParam,
-    ::testing::Values(
-        std::make_tuple(BFP::kDeprecatedBlock, false,
-                        test::kLatestFormatVersion),
-        std::make_tuple(BFP::kAuto, true, test::kLatestFormatVersion),
-        std::make_tuple(BFP::kAuto, false, test::kLatestFormatVersion)));
+    ::testing::Values(std::make_tuple(BloomFilterOptions::kDeprecatedBlock,
+                                      false, test::kLatestFormatVersion),
+                      std::make_tuple(BloomFilterOptions::kAuto, true,
+                                      test::kLatestFormatVersion),
+                      std::make_tuple(BloomFilterOptions::kAuto, false,
+                                      test::kLatestFormatVersion)));
 #endif  // ROCKSDB_VALGRIND_RUN
 
 TEST_F(DBBloomFilterTest, BloomFilterRate) {
@@ -1058,13 +1061,13 @@ class BloomStatsTestWithParam
       BlockBasedTableOptions table_options;
       table_options.hash_index_allow_collision = false;
       if (partition_filters_) {
-        assert(bfp_impl_ != BFP::kDeprecatedBlock);
+        assert(bfp_impl_ != BloomFilterOptions::kDeprecatedBlock);
         table_options.partition_filters = partition_filters_;
         table_options.index_type =
             BlockBasedTableOptions::IndexType::kTwoLevelIndexSearch;
       }
-      table_options.filter_policy.reset(
-          new BFP(10, static_cast<BFP::Mode>(bfp_impl_)));
+      table_options.filter_policy.reset(new BloomFilterPolicy(
+          10, static_cast<BloomFilterOptions::Mode>(bfp_impl_)));
       options_.table_factory.reset(NewBlockBasedTableFactory(table_options));
     }
     options_.env = env_;
@@ -1186,7 +1189,8 @@ TEST_P(BloomStatsTestWithParam, BloomStatsTestWithIter) {
   ASSERT_EQ(value3, iter->value().ToString());
   // The seek doesn't check block-based bloom filter because last index key
   // starts with the same prefix we're seeking to.
-  uint64_t expected_hits = bfp_impl_ == BFP::kDeprecatedBlock ? 1 : 2;
+  uint64_t expected_hits =
+      bfp_impl_ == BloomFilterOptions::kDeprecatedBlock ? 1 : 2;
   ASSERT_EQ(expected_hits, get_perf_context()->bloom_sst_hit_count);
 
   iter->Seek(key2);
@@ -1198,12 +1202,13 @@ TEST_P(BloomStatsTestWithParam, BloomStatsTestWithIter) {
 
 INSTANTIATE_TEST_CASE_P(
     BloomStatsTestWithParam, BloomStatsTestWithParam,
-    ::testing::Values(std::make_tuple(BFP::kDeprecatedBlock, false),
-                      std::make_tuple(BFP::kLegacyBloom, false),
-                      std::make_tuple(BFP::kLegacyBloom, true),
-                      std::make_tuple(BFP::kFastLocalBloom, false),
-                      std::make_tuple(BFP::kFastLocalBloom, true),
-                      std::make_tuple(BFP2::kPlainTable, false)));
+    ::testing::Values(
+        std::make_tuple(BloomFilterOptions::kDeprecatedBlock, false),
+        std::make_tuple(BloomFilterOptions::kLegacyBloom, false),
+        std::make_tuple(BloomFilterOptions::kLegacyBloom, true),
+        std::make_tuple(BloomFilterOptions::kFastLocalBloom, false),
+        std::make_tuple(BloomFilterOptions::kFastLocalBloom, true),
+        std::make_tuple(BFP2::kPlainTable, false)));
 
 namespace {
 void PrefixScanInit(DBBloomFilterTest* dbtest) {
@@ -1511,8 +1516,8 @@ int CountIter(std::unique_ptr<Iterator>& iter, const Slice& key) {
 // into the same string, or 2) the transformed seek key is of the same length
 // as the upper bound and two keys are adjacent according to the comparator.
 TEST_F(DBBloomFilterTest, DynamicBloomFilterUpperBound) {
-  for (auto bfp_impl : BFP::kAllFixedImpls) {
-    int using_full_builder = bfp_impl != BFP::kDeprecatedBlock;
+  for (auto bfp_impl : BloomFilterPolicy::kAllFixedImpls) {
+    int using_full_builder = bfp_impl != BloomFilterOptions::kDeprecatedBlock;
     Options options;
     options.create_if_missing = true;
     options.prefix_extractor.reset(NewCappedPrefixTransform(4));
@@ -1521,7 +1526,7 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterUpperBound) {
     // Enable prefix bloom for SST files
     BlockBasedTableOptions table_options;
     table_options.cache_index_and_filter_blocks = true;
-    table_options.filter_policy.reset(new BFP(10, bfp_impl));
+    table_options.filter_policy.reset(new BloomFilterPolicy(10, bfp_impl));
     table_options.index_shortening = BlockBasedTableOptions::
         IndexShorteningMode::kShortenSeparatorsAndSuccessor;
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
@@ -1642,8 +1647,8 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterUpperBound) {
 // Create multiple SST files each with a different prefix_extractor config,
 // verify iterators can read all SST files using the latest config.
 TEST_F(DBBloomFilterTest, DynamicBloomFilterMultipleSST) {
-  for (auto bfp_impl : BFP::kAllFixedImpls) {
-    int using_full_builder = bfp_impl != BFP::kDeprecatedBlock;
+  for (auto bfp_impl : BloomFilterPolicy::kAllFixedImpls) {
+    int using_full_builder = bfp_impl != BloomFilterOptions::kDeprecatedBlock;
     Options options;
     options.create_if_missing = true;
     options.prefix_extractor.reset(NewFixedPrefixTransform(1));
@@ -1651,7 +1656,7 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterMultipleSST) {
     options.statistics = CreateDBStatistics();
     // Enable prefix bloom for SST files
     BlockBasedTableOptions table_options;
-    table_options.filter_policy.reset(new BFP(10, bfp_impl));
+    table_options.filter_policy.reset(new BloomFilterPolicy(10, bfp_impl));
     table_options.cache_index_and_filter_blocks = true;
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
     DestroyAndReopen(options);
@@ -1777,7 +1782,7 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterMultipleSST) {
 // as expected
 TEST_F(DBBloomFilterTest, DynamicBloomFilterNewColumnFamily) {
   int iteration = 0;
-  for (auto bfp_impl : BFP::kAllFixedImpls) {
+  for (auto bfp_impl : BloomFilterPolicy::kAllFixedImpls) {
     Options options = CurrentOptions();
     options.create_if_missing = true;
     options.prefix_extractor.reset(NewFixedPrefixTransform(1));
@@ -1786,7 +1791,7 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterNewColumnFamily) {
     // Enable prefix bloom for SST files
     BlockBasedTableOptions table_options;
     table_options.cache_index_and_filter_blocks = true;
-    table_options.filter_policy.reset(new BFP(10, bfp_impl));
+    table_options.filter_policy.reset(new BloomFilterPolicy(10, bfp_impl));
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
     CreateAndReopenWithCF({"pikachu" + std::to_string(iteration)}, options);
     ReadOptions read_options;
@@ -1835,7 +1840,7 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterNewColumnFamily) {
 // Verify it's possible to change prefix_extractor at runtime and iterators
 // behaves as expected
 TEST_F(DBBloomFilterTest, DynamicBloomFilterOptions) {
-  for (auto bfp_impl : BFP::kAllFixedImpls) {
+  for (auto bfp_impl : BloomFilterPolicy::kAllFixedImpls) {
     Options options;
     options.create_if_missing = true;
     options.prefix_extractor.reset(NewFixedPrefixTransform(1));
@@ -1844,7 +1849,7 @@ TEST_F(DBBloomFilterTest, DynamicBloomFilterOptions) {
     // Enable prefix bloom for SST files
     BlockBasedTableOptions table_options;
     table_options.cache_index_and_filter_blocks = true;
-    table_options.filter_policy.reset(new BFP(10, bfp_impl));
+    table_options.filter_policy.reset(new BloomFilterPolicy(10, bfp_impl));
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
     DestroyAndReopen(options);
 

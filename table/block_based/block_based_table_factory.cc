@@ -194,37 +194,19 @@ static std::unordered_map<std::string, OptionTypeInfo>
     block_based_table_type_info = {
 #ifndef ROCKSDB_LITE
         /* currently not supported
-          std::shared_ptr<Cache> block_cache = nullptr;
-          std::shared_ptr<Cache> block_cache_compressed = nullptr;
+          std::shared_ptr<Cache> persistent_cache = nullptr;
          */
         {"flush_block_policy_factory",
-         {offsetof(struct BlockBasedTableOptions, flush_block_policy_factory),
-          OptionType::kUnknown, OptionVerificationType::kByName,
-          OptionTypeFlags::kNone, 0,
-          [](const std::string&, const std::string&, const ConfigOptions&,
-             char*) {
-            // Currently, we do not do anything to create a flush block policy
-            // factory
-            return Status::OK();
-          },
-          [](const std::string&, const char* addr, const ConfigOptions&,
-             std::string* value) {
-            const auto factory =
-                *(reinterpret_cast<
-                    const std::shared_ptr<FlushBlockPolicyFactory>*>(addr));
-            if (factory) {
-              *value = factory->Name();
-            } else {
-              *value = kNullptrString;
-            }
-            return Status::OK();
-          },
-          [](const std::string&, const char*, const char*, const ConfigOptions&,
-             std::string*) {
-            return true;  //**TODO: In the original code, we never bother to
-            // check that
-            // the factories are equal
-          }}},
+         OptionTypeInfo::AsCustomS<FlushBlockPolicyFactory>(
+             offsetof(struct BlockBasedTableOptions,
+                      flush_block_policy_factory),
+             OptionVerificationType::kByName, nullptr,
+             [](const std::string&, const char*, const char*,
+                const ConfigOptions&, std::string*) {
+               return true;  //**TODO: In the original code, we never bother to
+               // check that
+               // the factories are equal
+             })},
         {"cache_index_and_filter_blocks",
          {offsetof(struct BlockBasedTableOptions,
                    cache_index_and_filter_blocks),
@@ -328,101 +310,25 @@ static std::unordered_map<std::string, OptionTypeInfo>
           OptionType::kBoolean, OptionVerificationType::kNormal,
           OptionTypeFlags::kNone, 0}},
         {"filter_policy",
-         {offsetof(struct BlockBasedTableOptions, filter_policy),
-          OptionType::kUnknown, OptionVerificationType::kByNameAllowFromNull,
-          OptionTypeFlags::kNone, 0,
-          [](const std::string&, const std::string& value, const ConfigOptions&,
-             char* addr) {
-            const std::string kBloomName = "bloomfilter:";
-            auto* policy =
-                reinterpret_cast<std::shared_ptr<const FilterPolicy>*>(addr);
-            if (value == kNullptrString ||
-                value == "rocksdb.BuiltinBloomFilter") {
-              policy->reset();
-            } else if (value.compare(0, kBloomName.size(), kBloomName) == 0) {
-              size_t pos = value.find(':', kBloomName.size());
-              if (pos == std::string::npos) {
-                return Status::InvalidArgument(
-                    "Invalid filter policy config, missing bits_per_key");
-              } else {
-                double bits_per_key = ParseDouble(trim(
-                    value.substr(kBloomName.size(), pos - kBloomName.size())));
-                bool use_block_based_builder = ParseBoolean(
-                    "use_block_based_builder", trim(value.substr(pos + 1)));
-                policy->reset(NewBloomFilterPolicy(bits_per_key,
-                                                   use_block_based_builder));
-              }
-            } else {
-              return Status::InvalidArgument("Invalid filter policy name ",
-                                             value);
-            }
-            return Status::OK();
-          },
-          [](const std::string&, const char* addr, const ConfigOptions&,
-             std::string* value) {
-            const auto* policy =
-                reinterpret_cast<const std::shared_ptr<const FilterPolicy>*>(
-                    addr);
-            if (policy->get()) {
-              *value = (*policy)->Name();
-            } else {
-              *value = kNullptrString;
-            }
-            return Status::OK();
-          },
-          [](const std::string&, const char* addr1, const char* addr2,
-             const ConfigOptions&, std::string*) {
-            const auto* thisOne =
-                reinterpret_cast<const std::shared_ptr<const FilterPolicy>*>(
-                    addr1)
-                    ->get();
-            const auto* thatOne =
-                reinterpret_cast<const std::shared_ptr<FilterPolicy>*>(addr2)
-                    ->get();
-            if (thisOne == thatOne) {
-              return true;
-            } else if (thisOne != nullptr && thatOne != nullptr) {
-              return (strcmp(thisOne->Name(), thatOne->Name()) == 0);
-            } else {
-              return false;
-            }
-          }}},
+         OptionTypeInfo::AsCustomS<const FilterPolicy>(
+             offsetof(struct BlockBasedTableOptions, filter_policy),
+             OptionVerificationType::kByNameAllowFromNull)},
         {"block_cache",
-         {offsetof(struct BlockBasedTableOptions, block_cache),
-          OptionType::kUnknown, OptionVerificationType::kByNameAllowFromNull,
-          OptionTypeFlags::kConfigurableS, 0,
-          [](const std::string&, const std::string& value,
-             const ConfigOptions& options, char* addr) {
-            auto* cache = reinterpret_cast<std::shared_ptr<Cache>*>(addr);
-            return Cache::CreateFromString(value, options, cache);
-          },
-          [](const std::string&, const char*, const ConfigOptions&,
-             std::string*) {
-            // Currently, we do not do anything to export a block cache
-            return Status::OK();
-          },
-          [](const std::string&, const char*, const char*, const ConfigOptions&,
-             std::string*) {
-            return true;  // Don't check cache for equality
-          }}},
+         OptionTypeInfo::AsCustomS<Cache>(
+             offsetof(struct BlockBasedTableOptions, block_cache),
+             OptionVerificationType::kByNameAllowFromNull, nullptr,
+             [](const std::string&, const char*, const char*,
+                const ConfigOptions&, std::string*) {
+               return true;  // Don't check cache for equality
+             })},
         {"block_cache_compressed",
-         {offsetof(struct BlockBasedTableOptions, block_cache_compressed),
-          OptionType::kUnknown, OptionVerificationType::kByNameAllowFromNull,
-          OptionTypeFlags::kConfigurableS, 0,
-          [](const std::string&, const std::string& value,
-             const ConfigOptions& options, char* addr) {
-            auto* cache = reinterpret_cast<std::shared_ptr<Cache>*>(addr);
-            return Cache::CreateFromString(value, options, cache);
-          },
-          [](const std::string&, const char*, const ConfigOptions&,
-             std::string*) {
-            // Currently, we do not do anything to export a block cache
-            return Status::OK();
-          },
-          [](const std::string&, const char*, const char*, const ConfigOptions&,
-             std::string*) {
-            return true;  // Don't check cache for equality
-          }}},
+         OptionTypeInfo::AsCustomS<Cache>(
+             offsetof(struct BlockBasedTableOptions, block_cache_compressed),
+             OptionVerificationType::kByNameAllowFromNull, nullptr,
+             [](const std::string&, const char*, const char*,
+                const ConfigOptions&, std::string*) {
+               return true;  // Don't check cache for equality
+             })},
 #endif  // ROCKSDB_LITE
 };
 

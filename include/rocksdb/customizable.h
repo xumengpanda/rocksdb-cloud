@@ -43,17 +43,14 @@ class Customizable : public Configurable {
 
  protected:
   std::string GetOptionName(const std::string& long_name) const override;
-  bool MatchesOption(const Configurable* other,
-                     const ConfigOptions& options,
+  bool MatchesOption(const Configurable* other, const ConfigOptions& options,
                      std::string* name) const override;
 #ifndef ROCKSDB_LITE
   std::string AsString(const std::string& prefix,
                        const ConfigOptions& options) const override;
-  Status GetOneOption(const std::string& opt_name,
-                      const ConfigOptions& options,
+  Status GetOneOption(const std::string& opt_name, const ConfigOptions& options,
                       std::string* value) const override;
-  Status ListAllOptions(const std::string& prefix,
-                        const ConfigOptions& options,
+  Status ListAllOptions(const std::string& prefix, const ConfigOptions& options,
                         std::unordered_set<std::string>* result) const override;
 #endif  // ROCKSDB_LITE
  public:

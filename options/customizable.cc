@@ -34,10 +34,9 @@ Status Customizable::GetOneOption(const std::string& opt_name,
     return Configurable::GetOneOption(opt_name, options, value);
   }
 }
-  
+
 Status Customizable::ListAllOptions(
-    const std::string& prefix,
-    const ConfigOptions& options,
+    const std::string& prefix, const ConfigOptions& options,
     std::unordered_set<std::string>* result) const {
   result->emplace(prefix + kIdPropName);
   return Configurable::ListAllOptions(prefix, options, result);
@@ -59,7 +58,6 @@ bool Customizable::MatchesOption(const Configurable* other,
   }
   return true;
 }
-
 
 #ifndef ROCKSDB_LITE
 std::string Customizable::AsString(const std::string& prefix,
@@ -89,7 +87,7 @@ Status Customizable::GetOptionsMap(
   assert(id);
   assert(props);
   Status status;
- if (value.empty() || value == kNullptrString) {
+  if (value.empty() || value == kNullptrString) {
     id->clear();
   } else if (value.find('=') == std::string::npos) {
     *id = value;
@@ -106,7 +104,7 @@ Status Customizable::GetOptionsMap(
       }
     }
 #else
- } else {
+  } else {
     *id = value;
     props->clear();
 #endif

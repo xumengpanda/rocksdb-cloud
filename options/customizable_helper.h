@@ -96,8 +96,7 @@ static Status LoadUniqueObject(const std::string& value,
 template <typename T>
 static Status LoadStaticObject(const std::string& value,
                                const StaticFactoryFunc<T>& func,
-                               const ConfigOptions& cfg_opts,
-                               T** result) {
+                               const ConfigOptions& cfg_opts, T** result) {
   std::string id;
   std::unordered_map<std::string, std::string> opt_map;
   Status status = Customizable::GetOptionsMap(value, &id, &opt_map);

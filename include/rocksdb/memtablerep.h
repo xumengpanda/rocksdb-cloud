@@ -38,8 +38,12 @@
 #include <rocksdb/slice.h>
 #include <stdint.h>
 #include <stdlib.h>
+
 #include <memory>
 #include <stdexcept>
+
+#include "rocksdb/customizable.h"
+#include "rocksdb/status.h"
 
 namespace rocksdb {
 
@@ -48,6 +52,7 @@ class Allocator;
 class LookupKey;
 class SliceTransform;
 class Logger;
+struct DBOptions;
 
 typedef void* KeyHandle;
 
@@ -274,9 +279,13 @@ class MemTableRep {
 
 // This is the base class for all factories that are used by RocksDB to create
 // new MemTableRep objects
-class MemTableRepFactory {
+class MemTableRepFactory : public Customizable {
  public:
   virtual ~MemTableRepFactory() {}
+  static const char* Type() { return "MemTableRepFactory"; }
+  static Status CreateFromString(const std::string& id,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<MemTableRepFactory>* factory);
 
   virtual MemTableRep* CreateMemTableRep(const MemTableRep::KeyComparator&,
                                          Allocator*, const SliceTransform*,
@@ -287,7 +296,6 @@ class MemTableRepFactory {
       uint32_t /* column_family_id */) {
     return CreateMemTableRep(key_cmp, allocator, slice_transform, logger);
   }
-
   virtual const char* Name() const = 0;
 
   // Return true if the current MemTableRep supports concurrent inserts
@@ -310,7 +318,7 @@ class MemTableRepFactory {
 //     seeks with consecutive keys.
 class SkipListFactory : public MemTableRepFactory {
  public:
-  explicit SkipListFactory(size_t lookahead = 0) : lookahead_(lookahead) {}
+  explicit SkipListFactory(size_t lookahead = 0);
 
   using MemTableRepFactory::CreateMemTableRep;
   virtual MemTableRep* CreateMemTableRep(const MemTableRep::KeyComparator&,
@@ -321,9 +329,8 @@ class SkipListFactory : public MemTableRepFactory {
   bool IsInsertConcurrentlySupported() const override { return true; }
 
   bool CanHandleDuplicatedKey() const override { return true; }
-
  private:
-  const size_t lookahead_;
+  size_t lookahead_;
 };
 
 #ifndef ROCKSDB_LITE
@@ -336,10 +343,11 @@ class SkipListFactory : public MemTableRepFactory {
 //     VectorRep. On initialization, the underlying array will be at least count
 //     bytes reserved for usage.
 class VectorRepFactory : public MemTableRepFactory {
-  const size_t count_;
+ private:
+  size_t count_;
 
  public:
-  explicit VectorRepFactory(size_t count = 0) : count_(count) {}
+  explicit VectorRepFactory(size_t count = 0);
 
   using MemTableRepFactory::CreateMemTableRep;
   virtual MemTableRep* CreateMemTableRep(const MemTableRep::KeyComparator&,

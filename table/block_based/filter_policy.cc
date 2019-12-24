@@ -7,15 +7,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include "rocksdb/filter_policy.h"
+
 #include <array>
 #include <deque>
 
-#include "rocksdb/filter_policy.h"
-
+#include "options/customizable_helper.h"
 #include "rocksdb/slice.h"
 #include "table/block_based/block_based_filter_block.h"
-#include "table/block_based/full_filter_block.h"
 #include "table/block_based/filter_policy_internal.h"
+#include "table/block_based/full_filter_block.h"
 #include "third-party/folly/folly/ConstexprMath.h"
 #include "util/bloom_impl.h"
 #include "util/coding.h"
@@ -407,35 +408,78 @@ class AlwaysFalseFilter : public FilterBitsReader {
 
 }  // namespace
 
-const std::vector<BloomFilterPolicy::Mode> BloomFilterPolicy::kAllFixedImpls = {
-    kLegacyBloom,
-    kDeprecatedBlock,
-    kFastLocalBloom,
+const std::vector<BloomFilterOptions::Mode> BloomFilterPolicy::kAllFixedImpls =
+    {
+        BloomFilterOptions::Mode::kLegacyBloom,
+        BloomFilterOptions::Mode::kDeprecatedBlock,
+        BloomFilterOptions::Mode::kFastLocalBloom,
 };
 
-const std::vector<BloomFilterPolicy::Mode> BloomFilterPolicy::kAllUserModes = {
-    kDeprecatedBlock,
-    kAuto,
+const std::vector<BloomFilterOptions::Mode> BloomFilterPolicy::kAllUserModes = {
+    BloomFilterOptions::Mode::kDeprecatedBlock,
+    BloomFilterOptions::Mode::kAuto,
 };
 
-BloomFilterPolicy::BloomFilterPolicy(double bits_per_key, Mode mode)
-    : mode_(mode) {
+static double CheckBitsPerKey(double bits_per_key) {
   // Sanitize bits_per_key
   if (bits_per_key < 1.0) {
-    bits_per_key = 1.0;
+    return 1.0;
   } else if (!(bits_per_key < 100.0)) {  // including NaN
-    bits_per_key = 100.0;
+    return 100.0;
+  } else {
+    return bits_per_key;
   }
+}
+static OptionTypeMap bloom_filter_type_info = {
+#ifndef ROCKSDB_LITE
+    {"bits_per_key",
+     {offsetof(struct BloomFilterOptions, bits_per_key), OptionType::kDouble,
+      OptionVerificationType::kNormal, OptionTypeFlags::kNone, 0,
+      [](const std::string&, const std::string& value, const ConfigOptions&,
+         char* addr) {
+        double bits = ParseDouble(value);
+        *(reinterpret_cast<double*>(addr)) = CheckBitsPerKey(bits);
+        return Status::OK();
+      }}},
+    {"use_block_based_builder",
+     {offsetof(struct BloomFilterOptions, mode), OptionType::kUnknown,
+      OptionVerificationType::kNormal, OptionTypeFlags::kNone, 0,
+      [](const std::string&, const std::string& value, const ConfigOptions&,
+         char* addr) {
+        bool use_block_based_builder =
+            ParseBoolean("use_block_based_builder", trim(value));
+        auto* mode = reinterpret_cast<BloomFilterOptions::Mode*>(addr);
+        if (use_block_based_builder) {
+          *mode = BloomFilterOptions::Mode::kDeprecatedBlock;
+        } else {
+          *mode = BloomFilterOptions::Mode::kAuto;
+        }
+        return Status::OK();
+      },
+      [](const std::string&, const char* addr, const ConfigOptions&,
+         std::string* value) {
+        const auto* mode =
+            reinterpret_cast<const BloomFilterOptions::Mode*>(addr);
+        if (*mode == BloomFilterOptions::Mode::kDeprecatedBlock) {
+          *value = "true";
+        } else {
+          *value = "false";
+        }
+        return Status::OK();
+      },
+      [](const std::string&, const char* addr1, const char* addr2,
+         const ConfigOptions&, std::string*) {
+        return (*reinterpret_cast<const BloomFilterOptions::Mode*>(addr1) ==
+                *reinterpret_cast<const BloomFilterOptions::Mode*>(addr2));
+      }}},
+#endif  // !ROCKSDB_LITE
+};
 
-  // Includes a nudge toward rounding up, to ensure on all platforms
-  // that doubles specified with three decimal digits after the decimal
-  // point are interpreted accurately.
-  millibits_per_key_ = static_cast<int>(bits_per_key * 1000.0 + 0.500001);
-
-  // For better or worse, this is a rounding up of a nudged rounding up,
-  // e.g. 7.4999999999999 will round up to 8, but that provides more
-  // predictability against small arithmetic errors in floating point.
-  whole_bits_per_key_ = (millibits_per_key_ + 500) / 1000;
+BloomFilterPolicy::BloomFilterPolicy(double bits_per_key,
+                                     BloomFilterOptions::Mode mode) {
+  options_.bits_per_key = CheckBitsPerKey(bits_per_key);
+  options_.mode = mode;
+  RegisterOptions("BloomFilterOptions", &options_, &bloom_filter_type_info);
 }
 
 BloomFilterPolicy::~BloomFilterPolicy() {}
@@ -444,14 +488,29 @@ const char* BloomFilterPolicy::Name() const {
   return "rocksdb.BuiltinBloomFilter";
 }
 
+int BloomFilterPolicy::GetMillibitsPerKey() const {
+  // Includes a nudge toward rounding up, to ensure on all platforms
+  // that doubles specified with three decimal digits after the decimal
+  // point are interpreted accurately.
+  return static_cast<int>(options_.bits_per_key * 1000.0 + 0.500001);
+}
+
+int BloomFilterPolicy::GetWholeBitsPerKey() const {
+  // For better or worse, this is a rounding up of a nudged rounding up,
+  // e.g. 7.4999999999999 will round up to 8, but that provides more
+  // predictability against small arithmetic errors in floating point.
+  return (GetMillibitsPerKey() + 500) / 1000;
+}
+
 void BloomFilterPolicy::CreateFilter(const Slice* keys, int n,
                                      std::string* dst) const {
   // We should ideally only be using this deprecated interface for
   // appropriately constructed BloomFilterPolicy
-  assert(mode_ == kDeprecatedBlock);
+  assert(options_.mode == BloomFilterOptions::kDeprecatedBlock);
 
+  int whole_bits_per_key = GetWholeBitsPerKey();
   // Compute bloom filter size (in both bits and bytes)
-  uint32_t bits = static_cast<uint32_t>(n * whole_bits_per_key_);
+  uint32_t bits = static_cast<uint32_t>(n * whole_bits_per_key);
 
   // For small n, we can see a very high false positive rate.  Fix it
   // by enforcing a minimum bloom filter length.
@@ -461,7 +520,7 @@ void BloomFilterPolicy::CreateFilter(const Slice* keys, int n,
   bits = bytes * 8;
 
   int num_probes =
-      LegacyNoLocalityBloomImpl::ChooseNumProbes(whole_bits_per_key_);
+      LegacyNoLocalityBloomImpl::ChooseNumProbes(whole_bits_per_key);
 
   const size_t init_size = dst->size();
   dst->resize(init_size + bytes, 0);
@@ -510,24 +569,24 @@ FilterBitsBuilder* BloomFilterPolicy::GetFilterBitsBuilder() const {
 
 FilterBitsBuilder* BloomFilterPolicy::GetBuilderWithContext(
     const FilterBuildingContext& context) const {
-  Mode cur = mode_;
+  BloomFilterOptions::Mode cur = options_.mode;
   // Unusual code construction so that we can have just
   // one exhaustive switch without (risky) recursion
   for (int i = 0; i < 2; ++i) {
     switch (cur) {
-      case kAuto:
+      case BloomFilterOptions::kAuto:
         if (context.table_options.format_version < 5) {
-          cur = kLegacyBloom;
+          cur = BloomFilterOptions::kLegacyBloom;
         } else {
-          cur = kFastLocalBloom;
+          cur = BloomFilterOptions::kFastLocalBloom;
         }
         break;
-      case kDeprecatedBlock:
+      case BloomFilterOptions::kDeprecatedBlock:
         return nullptr;
-      case kFastLocalBloom:
-        return new FastLocalBloomBitsBuilder(millibits_per_key_);
-      case kLegacyBloom:
-        return new LegacyBloomBitsBuilder(whole_bits_per_key_);
+      case BloomFilterOptions::kFastLocalBloom:
+        return new FastLocalBloomBitsBuilder(GetMillibitsPerKey());
+      case BloomFilterOptions::kLegacyBloom:
+        return new LegacyBloomBitsBuilder(GetWholeBitsPerKey());
     }
   }
   assert(false);
@@ -681,11 +740,11 @@ FilterBitsReader* BloomFilterPolicy::GetBloomBitsReader(
 
 const FilterPolicy* NewBloomFilterPolicy(double bits_per_key,
                                          bool use_block_based_builder) {
-  BloomFilterPolicy::Mode m;
+  BloomFilterOptions::Mode m;
   if (use_block_based_builder) {
-    m = BloomFilterPolicy::kDeprecatedBlock;
+    m = BloomFilterOptions::kDeprecatedBlock;
   } else {
-    m = BloomFilterPolicy::kAuto;
+    m = BloomFilterOptions::kAuto;
   }
   assert(std::find(BloomFilterPolicy::kAllUserModes.begin(),
                    BloomFilterPolicy::kAllUserModes.end(),
@@ -699,4 +758,47 @@ FilterBuildingContext::FilterBuildingContext(
 
 FilterPolicy::~FilterPolicy() { }
 
+static const std::string kBloomName = "bloomfilter:";
+static bool LoadFilterPolicy(const std::string& id,
+                             std::shared_ptr<FilterPolicy>* policy) {
+  bool success = true;
+  if (id == "rocksdb.BuiltinBloomFilter") {
+    policy->reset(
+        new BloomFilterPolicy(0, BloomFilterOptions::kDeprecatedBlock));
+  } else {
+    success = false;
+  }
+  return success;
+}
+
+Status FilterPolicy::CreateFromString(
+    const std::string& value, const ConfigOptions& opts,
+    std::shared_ptr<const FilterPolicy>* policy) {
+  if (value == kNullptrString) {
+    policy->reset();
+  } else if (value.compare(0, kBloomName.size(), kBloomName) == 0) {
+    size_t pos = value.find(':', kBloomName.size());
+    if (pos == std::string::npos) {
+      return Status::InvalidArgument(
+          "Invalid filter policy config, missing bits_per_key");
+    } else {
+      double bits_per_key = ParseDouble(
+          trim(value.substr(kBloomName.size(), pos - kBloomName.size())));
+      bool use_block_based_builder =
+          ParseBoolean("use_block_based_builder", trim(value.substr(pos + 1)));
+      policy->reset(
+          NewBloomFilterPolicy(bits_per_key, use_block_based_builder));
+    }
+  } else {
+    auto result = std::const_pointer_cast<FilterPolicy>(*policy);
+    Status s =
+        LoadSharedObject<FilterPolicy>(value, LoadFilterPolicy, opts, &result);
+    if (s.ok() && result.get() != policy->get()) {
+      auto tmp = std::const_pointer_cast<const FilterPolicy>(result);
+      policy->swap(tmp);
+    }
+    return s;
+  }
+  return Status::OK();
+}
 }  // namespace rocksdb

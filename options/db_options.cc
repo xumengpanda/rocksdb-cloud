@@ -53,9 +53,11 @@ static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
       std::shared_ptr<DeleteScheduler> delete_scheduler;
       std::shared_ptr<Logger> info_log;
       std::shared_ptr<RateLimiter> rate_limiter;
-      std::shared_ptr<Statistics> statistics;
       std::vector<DbPath> db_paths;
+      std::shared_ptr<SstFileManager> sst_file_manager;
+      std::shared_ptr<WriteBufferManager> write_buffer_manager;
       std::vector<std::shared_ptr<EventListener>> listeners;
+      WalFilter* wal_filter;
      */
     {"advise_random_on_open",
      {offsetof(struct DBOptions, advise_random_on_open), OptionType::kBoolean,
@@ -375,6 +377,13 @@ static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
          std::string*) {
         return true;  // env is not compared.
       }}},
+    {"statistics", OptionTypeInfo::AsCustomS<Statistics>(
+                       offsetof(struct DBOptions, statistics),
+                       OptionVerificationType::kByNameAllowFromNull, nullptr,
+                       [](const std::string&, const char*, const char*,
+                          const ConfigOptions&, std::string*) {
+                         return true;  // stats are not compared.
+                       })},
     {"object_registry",
      {offsetof(struct DBOptions, object_registry), OptionType::kUnknown,
       OptionVerificationType::kNormal, OptionTypeFlags::kNone, 0,

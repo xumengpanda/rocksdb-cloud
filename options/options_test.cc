@@ -930,6 +930,7 @@ TEST_F(OptionsTest, ColumnFamilyOptionsSerialization) {
   Options options;
   ColumnFamilyOptions base_opt, new_opt;
   ConfigOptions cfg_opts(options);
+  cfg_opts.ignore_unknown_objects = true;
 
   Random rnd(302);
   // Phase 1: randomly assign base_opt
