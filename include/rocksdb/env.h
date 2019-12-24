@@ -56,6 +56,7 @@ struct ImmutableDBOptions;
 struct MutableDBOptions;
 class RateLimiter;
 class ThreadStatusUpdater;
+struct ConfigOptions;
 struct ThreadStatus;
 
 const size_t kDefaultPageSize = 4 * 1024;
@@ -150,11 +151,12 @@ class Env {
   static const char* Type() { return "Environment"; }
 
   // Loads the environment specified by the input value into the result
-  static Status LoadEnv(const std::string& value, Env** result);
+  static Status LoadEnv(const std::string& value, const ConfigOptions& opts,
+                        Env** result);
 
   // Loads the environment specified by the input value into the result
-  static Status LoadEnv(const std::string& value, Env** result,
-                        std::shared_ptr<Env>* guard);
+  static Status LoadEnv(const std::string& value, const ConfigOptions& opts,
+                        Env** result, std::shared_ptr<Env>* guard);
 
   // Return a default environment suitable for the current operating
   // system.  Sophisticated users may wish to provide their own Env

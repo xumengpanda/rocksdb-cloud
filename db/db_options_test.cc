@@ -48,7 +48,8 @@ class DBOptionsTest : public DBTestBase {
   std::unordered_map<std::string, std::string> GetMutableCFOptionsMap(
       const ColumnFamilyOptions& options) {
     std::string options_str;
-    GetStringFromColumnFamilyOptions(&options_str, options);
+    ConfigOptions cfg_opts;
+    GetStringFromColumnFamilyOptions(options, cfg_opts, &options_str);
     std::unordered_map<std::string, std::string> options_map;
     StringToMap(options_str, &options_map);
 

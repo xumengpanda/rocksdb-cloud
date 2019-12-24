@@ -357,10 +357,10 @@ static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
     {"env",
      {offsetof(struct DBOptions, env), OptionType::kUnknown,
       OptionVerificationType::kNormal, OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string& value, const ConfigOptions&,
-         char* addr) {
+      [](const std::string&, const std::string& value,
+         const ConfigOptions& opts, char* addr) {
         Env* env = *(reinterpret_cast<Env**>(addr));
-        Status s = Env::LoadEnv(value, &env);
+        Status s = Env::LoadEnv(value, opts, &env);
         if (s.ok()) {
           *(reinterpret_cast<Env**>(addr)) = env;
         }
@@ -374,6 +374,26 @@ static std::unordered_map<std::string, OptionTypeInfo> db_options_type_info = {
       [](const std::string&, const char*, const char*, const ConfigOptions&,
          std::string*) {
         return true;  // env is not compared.
+      }}},
+    {"object_registry",
+     {offsetof(struct DBOptions, object_registry), OptionType::kUnknown,
+      OptionVerificationType::kNormal, OptionTypeFlags::kNone, 0,
+      [](const std::string&, const std::string& value, const ConfigOptions&,
+         char* addr) {
+        auto* registry =
+            reinterpret_cast<std::shared_ptr<ObjectRegistry>*>(addr);
+        return registry->get()->ConfigureFromString(Env::Default(), value);
+      },
+      [](const std::string&, const char* addr, const ConfigOptions&,
+         std::string* value) {
+        const auto* registry =
+            reinterpret_cast<const std::shared_ptr<ObjectRegistry>*>(addr);
+        *value = registry->get()->ToString();
+        return Status::OK();
+      },
+      [](const std::string&, const char*, const char*, const ConfigOptions&,
+         std::string*) {
+        return true;  // registry is not compared.
       }}},
 };
 #endif  // ROCKSDB_LITE
@@ -711,7 +731,8 @@ Status GetDBOptionsFromMapInternal(
                                        false);
   Status status;
 
-  ConfigOptions cfg_options;
+  new_options->object_registry = base_options.object_registry;
+  ConfigOptions cfg_options(*new_options);
   cfg_options.input_strings_escaped = input_strings_escaped;
   cfg_options.ignore_unknown_options = ignore_unknown_options;
   if (unsupported_options != nullptr) {
@@ -733,7 +754,7 @@ Status GetDBOptionsFromMapInternal(
 Status GetStringFromDBOptions(std::string* opt_string,
                               const DBOptions& db_options,
                               const std::string& delimiter) {
-  ConfigOptions options;
+  ConfigOptions options(db_options);
   options.delimiter = delimiter;
   return GetStringFromDBOptions(db_options, options, opt_string);
 }
@@ -761,7 +782,7 @@ Status GetDBOptionsFromString(const DBOptions& base_options,
                               DBOptions* new_options) {
   ConfigurableStruct<DBOptions> config(base_options, &db_options_type_info,
                                        false);
-  ConfigOptions cfg_options;
+  ConfigOptions cfg_options(base_options);
   cfg_options.input_strings_escaped = false;
   cfg_options.ignore_unknown_options = false;
   Status status = config.ConfigureFromString(opts_str, cfg_options);
@@ -795,7 +816,7 @@ Status RocksDBOptionsParser::VerifyDBOptions(
     const DBOptions& base_opt, const DBOptions& persisted_opt,
     const std::unordered_map<std::string, std::string>* /*opt_map*/,
     OptionsSanityCheckLevel sanity_check_level) {
-  ConfigOptions cfg_opts;
+  ConfigOptions cfg_opts(base_opt);
   cfg_opts.sanity_level = sanity_check_level;
   ConfigurableStruct<DBOptions> base_config(base_opt, &db_options_type_info,
                                             false);

@@ -33,7 +33,12 @@ enum OptionsSanityCheckLevel : unsigned char {
 };
 struct ConfigOptions {
   // Constructs a new ConfigOptions with a new object registry.
+  // This method should only be used when a DBOptions is not available,
+  // else registry settings may be lost
   ConfigOptions();
+  // Constructs a new ConfigOptions using the object registry from
+  // the input options.
+  ConfigOptions(const DBOptions&);
 
   enum StringMode {
     kOptionNone = 0x00,

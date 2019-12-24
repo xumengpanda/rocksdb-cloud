@@ -11,6 +11,7 @@
 
 #include "options/options_helper.h"
 #include "rocksdb/convenience.h"
+#include "rocksdb/utilities/object_registry.h"
 #include "test_util/testharness.h"
 
 #ifndef GFLAGS
@@ -190,6 +191,8 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
        sizeof(std::vector<std::shared_ptr<EventListener>>)},
       {offsetof(struct DBOptions, row_cache), sizeof(std::shared_ptr<Cache>)},
       {offsetof(struct DBOptions, wal_filter), sizeof(const WalFilter*)},
+      {offsetof(struct DBOptions, object_registry),
+       sizeof(std::shared_ptr<ObjectRegistry>)},
   };
 
   char* options_ptr = new char[sizeof(DBOptions)];

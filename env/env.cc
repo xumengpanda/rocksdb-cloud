@@ -30,12 +30,14 @@ Status Env::NewLogger(const std::string& fname,
   return NewEnvLogger(fname, this, result);
 }
 
-Status Env::LoadEnv(const std::string& value, Env** result) {
+Status Env::LoadEnv(const std::string& value, const ConfigOptions& options,
+                    Env** result) {
   Env* env = *result;
   Status s;
 #ifndef ROCKSDB_LITE
-  s = ObjectRegistry::NewInstance()->NewStaticObject<Env>(value, &env);
+  s = options.registry->NewStaticObject<Env>(value, &env);
 #else
+  (void)options;
   s = Status::NotSupported("Cannot load environment in LITE mode: ", value);
 #endif
   if (s.ok()) {
@@ -44,8 +46,8 @@ Status Env::LoadEnv(const std::string& value, Env** result) {
   return s;
 }
 
-Status Env::LoadEnv(const std::string& value, Env** result,
-                    std::shared_ptr<Env>* guard) {
+Status Env::LoadEnv(const std::string& value, const ConfigOptions& options,
+                    Env** result, std::shared_ptr<Env>* guard) {
   assert(result);
   Status s;
 #ifndef ROCKSDB_LITE
@@ -53,8 +55,7 @@ Status Env::LoadEnv(const std::string& value, Env** result,
   std::unique_ptr<Env> uniq_guard;
   std::string err_msg;
   assert(guard != nullptr);
-  env = ObjectRegistry::NewInstance()->NewObject<Env>(value, &uniq_guard,
-                                                      &err_msg);
+  env = options.registry->NewObject<Env>(value, &uniq_guard, &err_msg);
   if (!env) {
     s = Status::NotFound(std::string("Cannot load ") + Env::Type() + ": " +
                          value);
@@ -67,6 +68,7 @@ Status Env::LoadEnv(const std::string& value, Env** result,
     *result = env;
   }
 #else
+  (void)options;
   (void)result;
   (void)guard;
   s = Status::NotSupported("Cannot load environment in LITE mode: ", value);

@@ -625,8 +625,9 @@ int SSTDumpTool::Run(int argc, char** argv, Options options) {
   // than Env::Default(), then try to load custom env based on dir_or_file.
   // Otherwise, the caller is responsible for creating custom env.
   if (!options.env || options.env == rocksdb::Env::Default()) {
+    ConfigOptions cfg;
     Env* env = Env::Default();
-    Status s = Env::LoadEnv(env_uri ? env_uri : "", &env, &env_guard);
+    Status s = Env::LoadEnv(env_uri ? env_uri : "", cfg, &env, &env_guard);
     if (!s.ok() && !s.IsNotFound()) {
       fprintf(stderr, "LoadEnv: %s\n", s.ToString().c_str());
       exit(1);

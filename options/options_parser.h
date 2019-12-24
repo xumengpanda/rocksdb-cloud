@@ -109,7 +109,7 @@ class RocksDBOptionsParser {
   Status EndSection(const OptionSection section, const std::string& title,
                     const std::string& section_arg,
                     const std::unordered_map<std::string, std::string>& opt_map,
-                    bool ignore_unknown_options);
+                    const ConfigOptions& cfg_opts);
 
   Status ValidityCheck();
 

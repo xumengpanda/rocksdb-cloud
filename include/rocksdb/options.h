@@ -44,12 +44,14 @@ class Logger;
 class MergeOperator;
 class Snapshot;
 class MemTableRepFactory;
+class ObjectRegistry;
 class RateLimiter;
 class Slice;
 class Statistics;
 class InternalKeyComparator;
 class WalFilter;
 class WriteBufferManager;
+struct ConfigOptions;
 struct TableProperties;
 
 // DB contents are stored in a set of blocks, each of which holds a
@@ -315,6 +317,7 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   explicit ColumnFamilyOptions(const Options& options);
 
   void Dump(Logger* log) const;
+  void Dump(Logger* log, const ConfigOptions& opts) const;
 };
 
 enum class WALRecoveryMode : char {
@@ -1114,6 +1117,9 @@ struct DBOptions {
   //
   // Default: 0
   size_t log_readahead_size = 0;
+#ifndef ROCKSDB_LITE
+  std::shared_ptr<ObjectRegistry> object_registry;
+#endif  // ROCKSDB_LITE
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

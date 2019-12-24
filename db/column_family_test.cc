@@ -67,8 +67,9 @@ class ColumnFamilyTestBase : public testing::Test {
 #ifndef ROCKSDB_LITE
     const char* test_env_uri = getenv("TEST_ENV_URI");
     if (test_env_uri) {
+      ConfigOptions opts(db_options_);
       Env* test_env = nullptr;
-      Status s = Env::LoadEnv(test_env_uri, &test_env, &env_guard_);
+      Status s = Env::LoadEnv(test_env_uri, opts, &test_env, &env_guard_);
       base_env = test_env;
       EXPECT_OK(s);
       EXPECT_NE(Env::Default(), base_env);
@@ -287,7 +288,8 @@ class ColumnFamilyTestBase : public testing::Test {
       // Verify the CF options of the returned CF handle.
       ColumnFamilyDescriptor desc;
       ASSERT_OK(handles_[cfi]->GetDescriptor(&desc));
-      RocksDBOptionsParser::VerifyCFOptions(desc.options, current_cf_opt);
+      RocksDBOptionsParser::VerifyCFOptions(desc.options, current_cf_opt,
+                                            ConfigOptions());
 #endif  // !ROCKSDB_LITE
       cfi++;
     }

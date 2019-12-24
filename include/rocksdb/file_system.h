@@ -43,6 +43,7 @@ class Slice;
 struct ImmutableDBOptions;
 struct MutableDBOptions;
 class RateLimiter;
+struct ConfigOptions;
 
 using AccessPattern = RandomAccessFile::AccessPattern;
 using FileAttributes = Env::FileAttributes;
@@ -161,7 +162,7 @@ class FileSystem {
   static const char* Type() { return "FileSystem"; }
 
   // Loads the FileSystem specified by the input value into the result
-  static Status Load(const std::string& value,
+  static Status Load(const std::string& value, const ConfigOptions& opts,
                      std::shared_ptr<FileSystem>* result);
 
   // Return a default fie_system suitable for the current operating

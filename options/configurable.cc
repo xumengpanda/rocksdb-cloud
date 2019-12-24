@@ -25,6 +25,13 @@ ConfigOptions::ConfigOptions()
 }
 
 #ifndef ROCKSDB_LITE
+ConfigOptions::ConfigOptions(const DBOptions& db_opts)
+    : registry(db_opts.object_registry) {}
+#else
+ConfigOptions::ConfigOptions(const DBOptions&) {}
+#endif
+
+#ifndef ROCKSDB_LITE
 void Configurable::RegisterOptions(const std::string& name, void* opt_ptr,
                                    const OptionTypeMap* opt_map) {
   options_[name] = std::pair<void*, const OptionTypeMap*>(opt_ptr, opt_map);

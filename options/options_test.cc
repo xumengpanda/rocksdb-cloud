@@ -145,7 +145,7 @@ TEST_F(OptionsTest, GetOptionsFromMapTest) {
   DBOptions db_opts;
   ColumnFamilyOptions base_cf_opt;
   ColumnFamilyOptions new_cf_opt;
-  ConfigOptions cfg_opts;
+  ConfigOptions cfg_opts(db_opts);
   ASSERT_OK(GetColumnFamilyOptionsFromMap(base_cf_opt, cf_options_map, cfg_opts,
                                           &new_cf_opt));
   ASSERT_EQ(new_cf_opt.write_buffer_size, 1U);
@@ -500,7 +500,8 @@ TEST_F(OptionsTest, GetColumnFamilyOptionsFromStringTest) {
       "write_buffer_size=10;max_write_buffer_number=16;"
       "block_based_table_factory={xx_block_size=4;}",
       cfg_opts, &new_cf_opt));
-  ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(base_cf_opt, new_cf_opt));
+  ASSERT_OK(
+      RocksDBOptionsParser::VerifyCFOptions(base_cf_opt, new_cf_opt, cfg_opts));
 
   ASSERT_OK(GetColumnFamilyOptionsFromString(
       base_cf_opt, "optimize_filters_for_hits=true", cfg_opts, &new_cf_opt));
@@ -881,7 +882,8 @@ TEST_F(OptionsTest, GetOptionsFromStringTest) {
   ASSERT_EQ(new_options.max_open_files, 1);
   ASSERT_TRUE(new_options.rate_limiter.get() != nullptr);
   Env* newEnv = new_options.env;
-  ASSERT_OK(Env::LoadEnv(kCustomEnvName, &newEnv));
+  ConfigOptions cfg(new_options);
+  ASSERT_OK(Env::LoadEnv(kCustomEnvName, cfg, &newEnv));
   ASSERT_EQ(newEnv, new_options.env);
 }
 
@@ -908,7 +910,7 @@ TEST_F(OptionsTest, OptionsComposeDecompose) {
   // we get same constituent options.
   DBOptions base_db_opts;
   ColumnFamilyOptions base_cf_opts;
-  ConfigOptions cfg_opts;
+  ConfigOptions cfg_opts(base_db_opts);
 
   Random rnd(301);
   test::RandomInitDBOptions(&base_db_opts, &rnd);
@@ -927,7 +929,7 @@ TEST_F(OptionsTest, OptionsComposeDecompose) {
 TEST_F(OptionsTest, ColumnFamilyOptionsSerialization) {
   Options options;
   ColumnFamilyOptions base_opt, new_opt;
-  ConfigOptions cfg_opts;
+  ConfigOptions cfg_opts(options);
 
   Random rnd(302);
   // Phase 1: randomly assign base_opt
@@ -946,6 +948,61 @@ TEST_F(OptionsTest, ColumnFamilyOptionsSerialization) {
   ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(base_opt, new_opt, cfg_opts));
   if (base_opt.compaction_filter) {
     delete base_opt.compaction_filter;
+  }
+}
+
+extern "C" {
+void RegisterTestEnvFactory(ObjectLibrary& library, const std::string& arg) {
+  library.Register<Env>(
+      arg, [](const std::string& /*uri*/, std::unique_ptr<Env>* /*guard */,
+              std::string* /* errmsg */) { return Env::Default(); });
+}
+}
+
+TEST_F(OptionsTest, LocalRegistry) {
+  DBOptions opt1;
+  DBOptions opt2;
+  DBOptions opt3 = opt1;
+  std::string msg;
+  Env* result = nullptr;
+  std::shared_ptr<ObjectLibrary> library =
+      opt1.object_registry->AddLocalLibrary("test");
+  library->Register(RegisterTestEnvFactory, "test-local");
+  ObjectLibrary::Default()->Register(RegisterTestEnvFactory, "test-global");
+  ASSERT_OK(opt1.object_registry->NewStaticObject<Env>("test-local", &result));
+  ASSERT_OK(opt1.object_registry->NewStaticObject<Env>("test-global", &result));
+  ASSERT_OK(opt2.object_registry->NewStaticObject<Env>("test-global", &result));
+  ASSERT_NOK(opt2.object_registry->NewStaticObject<Env>("test-local", &result));
+  // And test that a copy of the options also works
+  ASSERT_OK(opt3.object_registry->NewStaticObject<Env>("test-local", &result));
+  Options opts(opt1, ColumnFamilyOptions());
+  ASSERT_OK(opts.object_registry->NewStaticObject<Env>("test-local", &result));
+}
+
+TEST_F(OptionsTest, DynamicRegistry) {
+  std::shared_ptr<DynamicLibrary> library;
+  DBOptions opt1;
+  DBOptions opt2;
+  Status s = opt1.env->LoadLibrary("", "", &library);
+  if (s.ok()) {
+    std::string msg;
+    std::unique_ptr<Env> guard;
+    auto registry = ObjectRegistry::NewInstance();
+    ASSERT_EQ(
+        opt1.object_registry->NewObject<Env>("test-dynamic", &guard, &msg),
+        nullptr);
+    ASSERT_OK(opt1.object_registry->AddDynamicLibrary(
+        library, "RegisterTestEnvFactory", "test-dynamic"));
+    ASSERT_NE(opt1.object_registry->NewObject("test-dynamic", &guard, &msg),
+              nullptr);
+    ASSERT_EQ(opt2.object_registry->NewObject("test-dynamic", &guard, &msg),
+              nullptr);
+    std::string opt_str;
+    ASSERT_OK(GetStringFromDBOptions(&opt_str, opt1));
+    ASSERT_OK(GetDBOptionsFromString(opt1, opt_str, &opt2));
+    ASSERT_NE(opt2.object_registry->NewObject("test-dynamic", &guard, &msg),
+              nullptr);
+    ASSERT_OK(GetDBOptionsFromString(opt1, opt_str, &opt2));
   }
 }
 
@@ -1184,6 +1241,7 @@ class OptionsParserTest : public testing::Test {
 
 TEST_F(OptionsParserTest, Comment) {
   DBOptions db_opt;
+  ConfigOptions cfg_opts(db_opt);
   db_opt.max_open_files = 12345;
   db_opt.max_background_flushes = 301;
   db_opt.max_total_wal_size = 1024;
@@ -1215,7 +1273,7 @@ TEST_F(OptionsParserTest, Comment) {
   ASSERT_OK(RocksDBOptionsParser::VerifyDBOptions(*parser.db_opt(), db_opt));
   ASSERT_EQ(parser.NumColumnFamilies(), 1U);
   ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
-      *parser.GetCFOptions("default"), cf_opt));
+      *parser.GetCFOptions("default"), cf_opt, cfg_opts));
 }
 
 TEST_F(OptionsParserTest, ExtraSpace) {
@@ -1492,10 +1550,11 @@ TEST_F(OptionsParserTest, ParseVersion) {
 
 void VerifyCFPointerTypedOptions(
     ColumnFamilyOptions* base_cf_opt, const ColumnFamilyOptions* new_cf_opt,
+    const ConfigOptions& cfg_opts,
     const std::unordered_map<std::string, std::string>* new_cf_opt_map) {
   std::string name_buffer;
   ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(*base_cf_opt, *new_cf_opt,
-                                                  new_cf_opt_map));
+                                                  cfg_opts, new_cf_opt_map));
 
   // change the name of merge operator back-and-forth
   {
@@ -1506,11 +1565,11 @@ void VerifyCFPointerTypedOptions(
       // change the name  and expect non-ok status
       merge_operator->SetName("some-other-name");
       ASSERT_NOK(RocksDBOptionsParser::VerifyCFOptions(
-          *base_cf_opt, *new_cf_opt, new_cf_opt_map));
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
       // change the name back and expect ok status
       merge_operator->SetName(name_buffer);
-      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(*base_cf_opt, *new_cf_opt,
-                                                      new_cf_opt_map));
+      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
     }
   }
 
@@ -1524,11 +1583,11 @@ void VerifyCFPointerTypedOptions(
       // change the name and expect non-ok status
       compaction_filter_factory->SetName("some-other-name");
       ASSERT_NOK(RocksDBOptionsParser::VerifyCFOptions(
-          *base_cf_opt, *new_cf_opt, new_cf_opt_map));
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
       // change the name back and expect ok status
       compaction_filter_factory->SetName(name_buffer);
-      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(*base_cf_opt, *new_cf_opt,
-                                                      new_cf_opt_map));
+      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
     }
   }
 
@@ -1539,11 +1598,11 @@ void VerifyCFPointerTypedOptions(
       base_cf_opt->compaction_filter = nullptr;
       // set compaction_filter to nullptr and expect non-ok status
       ASSERT_NOK(RocksDBOptionsParser::VerifyCFOptions(
-          *base_cf_opt, *new_cf_opt, new_cf_opt_map));
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
       // set the value back and expect ok status
       base_cf_opt->compaction_filter = tmp_compaction_filter;
-      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(*base_cf_opt, *new_cf_opt,
-                                                      new_cf_opt_map));
+      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
     }
   }
 
@@ -1554,11 +1613,11 @@ void VerifyCFPointerTypedOptions(
       base_cf_opt->table_factory.reset();
       // set table_factory to nullptr and expect non-ok status
       ASSERT_NOK(RocksDBOptionsParser::VerifyCFOptions(
-          *base_cf_opt, *new_cf_opt, new_cf_opt_map));
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
       // set the value back and expect ok status
       base_cf_opt->table_factory = tmp_table_factory;
-      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(*base_cf_opt, *new_cf_opt,
-                                                      new_cf_opt_map));
+      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
     }
   }
 
@@ -1569,11 +1628,11 @@ void VerifyCFPointerTypedOptions(
       base_cf_opt->memtable_factory.reset();
       // set memtable_factory to nullptr and expect non-ok status
       ASSERT_NOK(RocksDBOptionsParser::VerifyCFOptions(
-          *base_cf_opt, *new_cf_opt, new_cf_opt_map));
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
       // set the value back and expect ok status
       base_cf_opt->memtable_factory = tmp_memtable_factory;
-      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(*base_cf_opt, *new_cf_opt,
-                                                      new_cf_opt_map));
+      ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
+          *base_cf_opt, *new_cf_opt, cfg_opts, new_cf_opt_map));
     }
   }
 }
@@ -1612,7 +1671,7 @@ TEST_F(OptionsParserTest, DumpAndParse) {
   const std::string kOptionsFileName = "test-persisted-options.ini";
   ASSERT_OK(PersistRocksDBOptions(base_db_opt, cf_names, base_cf_opts,
                                   kOptionsFileName, fs_.get()));
-
+  ConfigOptions cfg_opts(base_db_opt);
   RocksDBOptionsParser parser;
   ASSERT_OK(parser.Parse(kOptionsFileName, fs_.get()));
 
@@ -1635,14 +1694,14 @@ TEST_F(OptionsParserTest, DumpAndParse) {
     const auto* cf_opt = parser.GetCFOptions(cf_names[c]);
     ASSERT_NE(cf_opt, nullptr);
     ASSERT_OK(RocksDBOptionsParser::VerifyCFOptions(
-        base_cf_opts[c], *cf_opt, &(parser.cf_opt_maps()->at(c))));
+        base_cf_opts[c], *cf_opt, cfg_opts, &(parser.cf_opt_maps()->at(c))));
   }
 
   // Further verify pointer-typed options
   for (int c = 0; c < num_cf; ++c) {
     const auto* cf_opt = parser.GetCFOptions(cf_names[c]);
     ASSERT_NE(cf_opt, nullptr);
-    VerifyCFPointerTypedOptions(&base_cf_opts[c], cf_opt,
+    VerifyCFPointerTypedOptions(&base_cf_opts[c], cf_opt, cfg_opts,
                                 &(parser.cf_opt_maps()->at(c)));
   }
 
