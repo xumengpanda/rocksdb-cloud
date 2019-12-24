@@ -54,6 +54,9 @@ struct ConfigOptions {
   bool ignore_unknown_options = false;
   // If the strings are escaped (old-style?)
   bool input_strings_escaped = false;
+  // Do not return an error if a customizable object cannot be
+  // loaded from an external library
+  bool ignore_unknown_objects = false;
   // The separator between options when in a string
   std::string delimiter = ";";
   // An OR-ed together set of string mode otpions controlling how options are
@@ -476,6 +479,8 @@ class Configurable {
                              std::string* mismatch) const;
 #endif
   static const std::string kDefaultPrefix /*  = "rocksdb." */;
+  static const std::string kIdPropName /* = "id" */;
+  static const std::string kIdPropSuffix /* = ".id" */;
 
  private:
 #ifndef ROCKSDB_LITE

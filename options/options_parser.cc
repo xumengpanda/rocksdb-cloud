@@ -40,7 +40,7 @@ Status PersistRocksDBOptions(const DBOptions& db_opt,
                              const std::vector<ColumnFamilyOptions>& cf_opts,
                              const std::string& file_name, FileSystem* fs) {
   TEST_SYNC_POINT("PersistRocksDBOptions:start");
-  ConfigOptions cfg_opts;
+  ConfigOptions cfg_opts(db_opt);
   cfg_opts.delimiter = "\n  ";
   if (cf_names.size() != cf_opts.size()) {
     return Status::InvalidArgument(
@@ -411,10 +411,10 @@ Status RocksDBOptionsParser::EndSection(
           section_arg);
     }
     // Ignore error as table factory deserialization is optional
-    s = TableFactory::LoadTableFactory(
+    s = TableFactory::CreateFromString(
         section_title.substr(
             opt_section_titles[kOptionSectionTableOptions].size()),
-        &(cf_opt->table_factory));
+        cfg_opts, &(cf_opt->table_factory));
     if (s.ok()) {
       s = cf_opt->table_factory->ConfigureFromMap(opt_map, cfg_opts);
     }
@@ -500,9 +500,6 @@ Status RocksDBOptionsParser::VerifyRocksDBOptionsFromFile(
     OptionsSanityCheckLevel sanity_check_level, bool ignore_unknown_options) {
   RocksDBOptionsParser parser;
   std::unique_ptr<SequentialFile> seq_file;
-  ConfigOptions options;
-  options.sanity_level = sanity_check_level;
-  options.ignore_unknown_options = ignore_unknown_options;
   Status s = parser.Parse(file_name, fs, ignore_unknown_options);
   if (!s.ok()) {
     return s;
@@ -514,6 +511,9 @@ Status RocksDBOptionsParser::VerifyRocksDBOptionsFromFile(
   if (!s.ok()) {
     return s;
   }
+  ConfigOptions cfg_opts(db_opt);
+  cfg_opts.sanity_level = sanity_check_level;
+  cfg_opts.ignore_unknown_options = ignore_unknown_options;
 
   // Verify ColumnFamily Name
   if (cf_names.size() != parser.cf_names()->size()) {
@@ -552,14 +552,14 @@ Status RocksDBOptionsParser::VerifyRocksDBOptionsFromFile(
     }
   }
   for (size_t i = 0; i < cf_opts.size(); ++i) {
-    s = VerifyCFOptions(cf_opts[i], parser.cf_opts()->at(i), options,
+    s = VerifyCFOptions(cf_opts[i], parser.cf_opts()->at(i), cfg_opts,
                         &(parser.cf_opt_maps()->at(i)));
     if (!s.ok()) {
       return s;
     }
     s = VerifyTableFactory(cf_opts[i].table_factory.get(),
                            parser.cf_opts()->at(i).table_factory.get(),
-                           options);
+                           cfg_opts);
     if (!s.ok()) {
       return s;
     }

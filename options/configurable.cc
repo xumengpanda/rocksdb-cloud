@@ -7,6 +7,7 @@
 
 #include "logging/logging.h"
 #include "options/options_helper.h"
+#include "rocksdb/customizable.h"
 #include "rocksdb/status.h"
 #include "rocksdb/utilities/object_registry.h"
 #include "rocksdb/utilities/options_type.h"
@@ -15,6 +16,8 @@
 
 namespace rocksdb {
 
+const std::string Configurable::kIdPropName = "id";
+const std::string Configurable::kIdPropSuffix = "." + kIdPropName;
 const std::string Configurable::kDefaultPrefix = "rocksdb.";
 
 ConfigOptions::ConfigOptions()
@@ -107,6 +110,30 @@ Status Configurable::DoConfigureOptions(
     return Status::OK();
   } else if (!invalid.ok()) {
     return invalid;
+  } else if (result.ok()) {
+    return result;
+  } else if (options.input_strings_escaped &&
+             unused_opts->size() > invalid_opts.size()) {
+    // This is a special case to handle the case for customizable objects
+    // that cannot be loaded, because the registry is empty or the type/name
+    // is not in the registry.  Most likely, the type was never registered
+    for (const auto u : *unused_opts) {
+      if (invalid_opts.find(u.first) == invalid_opts.end()) {
+        for (const auto& o : options_) {
+          const auto opt_map = o.second.second;
+          auto opt_iter = FindOption(u.first, *opt_map);
+          if (opt_iter == opt_map->end()) {
+            // This is an option unknown to us...
+            return result;
+          } else if (!opt_iter->second.IsCustomizable()) {
+            // This option is not customizable.  Return the result
+            return result;
+          }
+        }
+      }  // End for unused opts that are valid
+    }    // End for all unused opts
+    // All of the unused options were customizables, so return success
+    return Status::OK();
   } else {
     return result;
   }
@@ -252,6 +279,8 @@ Status Configurable::SetOption(const OptionTypeMap& opt_map, void* opt_ptr,
     } else if (name == opt_iter->first) {
       // If the name matches exactly, parse the option
       return ParseOption(opt_info, opt_addr, name, value, options);
+    } else if (opt_info.IsCustomizable() && EndsWith(name, kIdPropSuffix)) {
+      return ParseOption(opt_info, opt_addr, name, value, options);
     } else if (opt_info.IsStruct()) {
       // The option is "<struct>.<name>"
       const auto* struct_map =
@@ -287,6 +316,13 @@ Status Configurable::ParseOption(const OptionTypeInfo& opt_info, char* opt_addr,
     return status;
   } else if (opt_info.IsStruct()) {
     status = SetStruct(opt_name, opt_value, options, opt_addr);
+  } else if (opt_info.type == OptionType::kCustomizable) {
+    Customizable* custom = opt_info.AsRawPointer<Customizable>(opt_addr);
+    if (custom == nullptr || opt_value != custom->Name()) {
+      return Status::NotFound("Could not find customizable: ", opt_value);
+    } else {
+      return Status::OK();
+    }
   } else if (opt_info.IsConfigurable()) {
     Configurable* config = opt_info.AsRawPointer<Configurable>(opt_addr);
     if (opt_value.empty()) {
@@ -459,6 +495,8 @@ Status Configurable::SerializeOption(const std::string& opt_name,
         copy.delimiter = ";";
         *opt_value = config->ToString(copy);
       }
+    } else if (opt_info.IsCustomizable() && !options.IsDetached()) {
+      *opt_value = kNullptrString;
     }
     return Status::OK();
   }

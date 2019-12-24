@@ -22,7 +22,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "rocksdb/configurable.h"
+#include "rocksdb/customizable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -491,7 +491,7 @@ extern TableFactory* NewCuckooTableFactory(
 class RandomAccessFileReader;
 
 // A base class for table factories.
-class TableFactory : public Configurable {
+class TableFactory : public Customizable {
  public:
   static const std::string kBlockBasedTableName;
   static const std::string kBlockBasedTableOpts;
@@ -509,7 +509,7 @@ class TableFactory : public Configurable {
   //
   // Names starting with "rocksdb." are reserved and should not be used
   // by any clients of this package.
-  virtual const char* Name() const = 0;
+  static const char* Type() { return "TableFactory"; }
 
   // Returns a Table object table that can fetch data from file specified
   // in parameter file. It's the caller's responsibility to make sure
@@ -556,7 +556,8 @@ class TableFactory : public Configurable {
       const TableBuilderOptions& table_builder_options,
       uint32_t column_family_id, WritableFileWriter* file) const = 0;
 
-  static Status LoadTableFactory(const std::string& id,
+  static Status CreateFromString(const std::string& value,
+                                 const ConfigOptions& opts,
                                  std::shared_ptr<TableFactory>* factory);
 
   // Return is delete range supported

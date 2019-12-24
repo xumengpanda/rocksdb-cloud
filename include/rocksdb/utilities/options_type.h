@@ -35,7 +35,6 @@ enum class OptionType {
   kCompressionType,
   kCompressionOpts,
   kVectorCompressionType,
-  kTableFactory,
   kComparator,
   kCompactionFilter,
   kCompactionFilterFactory,
@@ -50,6 +49,7 @@ enum class OptionType {
   kEnum,
   kStruct,
   kConfigurable,
+  kCustomizable,
   kUnknown,
 };
 
@@ -80,6 +80,7 @@ enum OptionTypeFlags {
   kEnum = 0x100,          // The option is an enum
   kStruct = 0200,         // The option is a struct
   kConfigurable = 0x400,  // The option is a ConfigurableObject
+  kCustomizable = 0xC00,  // The option is a CustomizableObject
   kMStruct = kStruct | kMutable,
   kMEnum = kEnum | kMutable,
   kMConfigurable = kConfigurable | kMutable,
@@ -89,6 +90,14 @@ enum OptionTypeFlags {
   kMConfigurableP = kMConfigurable | kPointer,
   kMConfigurableS = kMConfigurable | kShared,
   kMConfigurableU = kMConfigurable | kUnique,
+
+  kMCustomizable = kCustomizable | kMutable,
+  kCustomizableP = kCustomizable | kPointer,
+  kCustomizableS = kCustomizable | kShared,
+  kCustomizableU = kCustomizable | kUnique,
+  kMCustomizableP = kMCustomizable | kPointer,
+  kMCustomizableS = kMCustomizable | kShared,
+  kMCustomizableU = kMCustomizable | kUnique,
 };
 
 template <typename T>
@@ -233,6 +242,12 @@ class OptionTypeInfo {
                 OptionTypeFlags::kConfigurable);
   }
 
+  bool IsCustomizable() const {
+    return ((type == OptionType::kCustomizable) ||
+            (flags & OptionTypeFlags::kCustomizable) ==
+                OptionTypeFlags::kCustomizable);
+  }
+
   template <typename T>
   const T* AsRawPointer(const char* addr) const {
     if (addr == nullptr) {
@@ -303,6 +318,67 @@ class OptionTypeInfo {
                   *reinterpret_cast<const T*>(addr2));
         });
   }
+
+  template <typename T>
+  static OptionTypeInfo AsCustomS(int _offset, OptionVerificationType ovt) {
+    return AsCustomS<T>(_offset, ovt, nullptr, nullptr);
+  }
+
+  template <typename T>
+  static OptionTypeInfo AsCustomS(int _offset, OptionVerificationType ovt,
+                                  const StringFunc& _sfunc,
+                                  const EqualsFunc& _efunc) {
+    return OptionTypeInfo(
+        _offset, OptionType::kCustomizable, ovt,
+        OptionTypeFlags::kCustomizableS, 0,
+        [](const std::string&, const std::string& value,
+           const ConfigOptions& opts, char* addr) {
+          auto* shared = reinterpret_cast<std::shared_ptr<T>*>(addr);
+          return T::CreateFromString(value, opts, shared);
+        },
+        _sfunc, _efunc);
+  }
+
+  template <typename T>
+  static OptionTypeInfo AsCustomU(int _offset, OptionVerificationType ovt) {
+    return AsCustomU<T>(_offset, ovt, nullptr, nullptr);
+  }
+
+  template <typename T>
+  static OptionTypeInfo AsCustomU(int _offset, OptionVerificationType ovt,
+                                  const StringFunc& _sfunc,
+                                  const EqualsFunc& _efunc) {
+    return OptionTypeInfo(
+        _offset, OptionType::kCustomizable, ovt,
+        OptionTypeFlags::kCustomizableU, 0,
+        [](const std::string&, const std::string& value,
+           const ConfigOptions& opts, char* addr) {
+          auto* unique = reinterpret_cast<std::unique_ptr<T>*>(addr);
+          return T::CreateFromString(value, opts, unique);
+        },
+        _sfunc, _efunc);
+  }
+
+  template <typename T>
+  static OptionTypeInfo AsCustomP(int _offset, OptionVerificationType ovt) {
+    return AsCustomP<T>(_offset, ovt, nullptr, nullptr);
+  }
+
+  template <typename T>
+  static OptionTypeInfo AsCustomP(int _offset, OptionVerificationType ovt,
+                                  const StringFunc& _sfunc,
+                                  const EqualsFunc& _efunc) {
+    return OptionTypeInfo(
+        _offset, OptionType::kCustomizable, ovt,
+        OptionTypeFlags::kCustomizableP, 0,
+        [](const std::string&, const std::string& value,
+           const ConfigOptions& opts, char* addr) {
+          auto** pointer = reinterpret_cast<T**>(addr);
+          return T::CreateFromString(value, opts, pointer);
+        },
+        _sfunc, _efunc);
+  }
+
   Status ParseOption(const std::string& opt_name, const std::string& opt_value,
                      const ConfigOptions& options, char* opt_addr) const;
   Status SerializeOption(const std::string& opt_name, const char* opt_addr,

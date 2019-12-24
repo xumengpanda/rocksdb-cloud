@@ -100,6 +100,14 @@ static OptionTypeMap inherited_option_info = {
 #endif  // ROCKSDB_LITE
 };
 
+static OptionTypeMap custom_option_info = {
+#ifndef ROCKSDB_LITE
+    {"shared", OptionTypeInfo::AsCustomS<TableFactory>(
+                   offsetof(struct TestOptions, shared),
+                   OptionVerificationType::kByName)},
+#endif
+};
+
 static OptionTypeMap all_option_info = {
 #ifndef ROCKSDB_LITE
     {"int",
@@ -769,6 +777,11 @@ static Configurable* ThreeDeepFactory() {
   return simple;
 }
 
+static Configurable* CustomTableFactory() {
+  return InheritedConfigurable::Create("simple", TestConfigMode::kDefaultMode,
+                                       &custom_option_info);
+}
+
 INSTANTIATE_TEST_CASE_P(
     ParamTest, ConfigurableParamTest,
     testing::Values(std::pair<std::string, ConfigTestFactoryFunc>(
@@ -798,7 +811,11 @@ INSTANTIATE_TEST_CASE_P(
                         "int=11;bool=true;string=outer;"
                         "unique={int=22;string=inner;"
                         "unique={int=33;string=unique}};",
-                        ThreeDeepFactory)));
+                        ThreeDeepFactory),
+                    std::pair<std::string, ConfigTestFactoryFunc>(
+                        "int=11;bool=true;string=outer;"
+                        "shared={id=PlainTable}",
+                        CustomTableFactory)));
 #endif  // ROCKSDB_LITE
 
 }  // namespace rocksdb

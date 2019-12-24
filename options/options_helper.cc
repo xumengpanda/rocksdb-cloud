@@ -506,14 +506,6 @@ static bool SerializeSingleOptionHelper(const char* opt_address,
                                           : kNullptrString;
       break;
     }
-    case OptionType::kTableFactory: {
-      const auto* table_factory_ptr =
-          reinterpret_cast<const std::shared_ptr<const TableFactory>*>(
-              opt_address);
-      *value = table_factory_ptr->get() ? table_factory_ptr->get()->Name()
-                                        : kNullptrString;
-      break;
-    }
     case OptionType::kComparator: {
       // it's a const pointer of const Comparator*
       const auto* ptr = reinterpret_cast<const Comparator* const*>(opt_address);
@@ -774,7 +766,7 @@ Status GetOptionsFromString(const Options& base_options,
   }
   s = GetDBOptionsFromMapInternal(base_options, opts_map, false,
                                   &new_db_options, &unused_opts, true);
-  ConfigOptions cfg_options;
+  ConfigOptions cfg_options(new_db_options);
   cfg_options.ignore_unknown_options = true;
   if (s.ok()) {
     s = GetColumnFamilyOptionsFromMap(base_options, unused_opts, cfg_options,

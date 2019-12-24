@@ -23,8 +23,8 @@
 #include "rocksdb/file_system.h"
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/options.h"
+#include "rocksdb/table.h"
 #include "rocksdb/utilities/object_registry.h"
-#include "table/plain/plain_table_factory.h"
 #include "util/cast_util.h"
 
 namespace rocksdb {
@@ -430,22 +430,17 @@ static std::unordered_map<std::string, OptionTypeInfo> cf_options_type_info = {
             ->reset(factory.release());
         return Status::OK();
       }}},
-    {"table_factory",
-     {offset_of(&ColumnFamilyOptions::table_factory), OptionType::kTableFactory,
-      OptionVerificationType::kByName, OptionTypeFlags::kNone, 0,
-      [](const std::string&, const std::string& value, const ConfigOptions&,
-         char* addr) {
-        auto* tf = reinterpret_cast<std::shared_ptr<TableFactory>*>(addr);
-        return TableFactory::LoadTableFactory(value, tf);
-      }}},
+    {"table_factory", OptionTypeInfo::AsCustomS<TableFactory>(
+                          offset_of(&ColumnFamilyOptions::table_factory),
+                          OptionVerificationType::kByName)},
     {"block_based_table_factory",
      {offset_of(&ColumnFamilyOptions::table_factory), OptionType::kUnknown,
       OptionVerificationType::kAlias, OptionTypeFlags::kNone, 0,
       [](const std::string&, const std::string& value,
          const ConfigOptions& opts, char* addr) {
         auto* tf = reinterpret_cast<std::shared_ptr<TableFactory>*>(addr);
-        Status s = TableFactory::LoadTableFactory(
-            TableFactory::kBlockBasedTableName, tf);
+        Status s = TableFactory::CreateFromString(
+            TableFactory::kBlockBasedTableName, opts, tf);
         if (s.ok()) {
           s = tf->get()->ConfigureFromString(value, opts);
         }
@@ -457,8 +452,8 @@ static std::unordered_map<std::string, OptionTypeInfo> cf_options_type_info = {
       [](const std::string&, const std::string& value,
          const ConfigOptions& opts, char* addr) {
         auto tf = reinterpret_cast<std::shared_ptr<TableFactory>*>(addr);
-        Status s =
-            TableFactory::LoadTableFactory(TableFactory::kPlainTableName, tf);
+        Status s = TableFactory::CreateFromString(TableFactory::kPlainTableName,
+                                                  opts, tf);
         if (s.ok()) {
           s = tf->get()->ConfigureFromString(value, opts);
         }

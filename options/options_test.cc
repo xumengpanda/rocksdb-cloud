@@ -547,8 +547,8 @@ TEST_F(OptionsTest, GetColumnFamilyOptionsFromStringTest) {
 TEST_F(OptionsTest, GetBlockBasedTableOptionsFromString) {
   std::shared_ptr<TableFactory> factory;
   ConfigOptions cfg_opts;
-  ASSERT_OK(TableFactory::LoadTableFactory(TableFactory::kBlockBasedTableName,
-                                           &factory));
+  ASSERT_OK(TableFactory::CreateFromString(TableFactory::kBlockBasedTableName,
+                                           cfg_opts, &factory));
   const auto* new_opt = factory->GetOptions<BlockBasedTableOptions>(
       TableFactory::kBlockBasedTableOpts);
   auto table_opt = *new_opt;
@@ -585,8 +585,8 @@ TEST_F(OptionsTest, GetBlockBasedTableOptionsFromString) {
 
   // Create a new factory with the default options
   factory.reset();
-  ASSERT_OK(TableFactory::LoadTableFactory(TableFactory::kBlockBasedTableName,
-                                           &factory));
+  ASSERT_OK(TableFactory::CreateFromString(TableFactory::kBlockBasedTableName,
+                                           cfg_opts, &factory));
   new_opt = factory->GetOptions<BlockBasedTableOptions>(
       TableFactory::kBlockBasedTableOpts);
   ASSERT_NE(new_opt, nullptr);
@@ -747,8 +747,8 @@ TEST_F(OptionsTest, GetBlockBasedTableOptionsFromString) {
 TEST_F(OptionsTest, GetPlainTableOptionsFromString) {
   ConfigOptions cfg_opts;
   std::shared_ptr<TableFactory> factory;
-  ASSERT_OK(
-      TableFactory::LoadTableFactory(TableFactory::kPlainTableName, &factory));
+  ASSERT_OK(TableFactory::CreateFromString(TableFactory::kPlainTableName,
+                                           cfg_opts, &factory));
   const auto* new_opt =
       factory->GetOptions<PlainTableOptions>(TableFactory::kPlainTableOpts);
   // make sure default values are overwritten by something else
