@@ -9,7 +9,12 @@
 
 #include "db/db_test_util.h"
 #include "db/forward_iterator.h"
+#include "util/stderr_logger.h"
+#include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/env_encryption.h"
+#ifdef USE_AWS
+#include "cloud/cloud_env_impl.h"
+#endif
 #include "rocksdb/utilities/object_registry.h"
 
 namespace rocksdb {
@@ -48,7 +53,10 @@ ROT13BlockCipher rot13Cipher_(16);
 #endif  // ROCKSDB_LITE
 
 DBTestBase::DBTestBase(const std::string path)
-    : mem_env_(nullptr), encrypted_env_(nullptr), option_config_(kDefault) {
+    : mem_env_(nullptr),
+      encrypted_env_(nullptr),
+      option_config_(kDefault),
+      s3_env_(nullptr) {
   Env* base_env = Env::Default();
 #ifndef ROCKSDB_LITE
   const char* test_env_uri = getenv("TEST_ENV_URI");
@@ -72,6 +80,14 @@ DBTestBase::DBTestBase(const std::string path)
 #endif  // !ROCKSDB_LITE
   env_ = new SpecialEnv(encrypted_env_ ? encrypted_env_
                                        : (mem_env_ ? mem_env_ : base_env));
+#ifdef USE_AWS
+  // Randomize the test path so that multiple tests can run in parallel
+  std::string mypath = path + "_" + std::to_string(rand());
+  option_env_ = kDefaultEnv;
+  env_->NewLogger(test::TmpDir(env_) + "/rocksdb-cloud.log", &info_log_);
+  info_log_->SetInfoLogLevel(InfoLogLevel::DEBUG_LEVEL);
+  s3_env_ = CreateNewAwsEnv(mypath);
+#endif
   env_->SetBackgroundThreads(1, Env::LOW);
   env_->SetBackgroundThreads(1, Env::HIGH);
   dbname_ = test::PerThreadDBPath(env_, path);
@@ -107,6 +123,7 @@ DBTestBase::~DBTestBase() {
     EXPECT_OK(DestroyDB(dbname_, options));
   }
   delete env_;
+  delete s3_env_;
 }
 
 bool DBTestBase::ShouldSkipOptions(int option_config, int skip_mask) {
@@ -161,25 +178,46 @@ bool DBTestBase::ShouldSkipOptions(int option_config, int skip_mask) {
     return false;
 }
 
+bool DBTestBase::ShouldSkipAwsOptions(int option_config) {
+    // AWS Env doesn't work with DirectIO
+    return option_config == kDirectIO;
+}
+
 // Switch to a fresh database with the next option configuration to
 // test.  Return false if there are no more configurations to test.
 bool DBTestBase::ChangeOptions(int skip_mask) {
-  for (option_config_++; option_config_ < kEnd; option_config_++) {
-    if (ShouldSkipOptions(option_config_, skip_mask)) {
-      continue;
-    }
-    break;
-  }
-
-  if (option_config_ >= kEnd) {
-    Destroy(last_options_);
-    return false;
-  } else {
-    auto options = CurrentOptions();
-    options.create_if_missing = true;
-    DestroyAndReopen(options);
-    return true;
-  }
+  while (true) {
+   for (option_config_++; option_config_ < kEnd; option_config_++) {
+     if (ShouldSkipOptions(option_config_, skip_mask)) {
+       continue;
+     }
+     if (option_env_ == kAwsEnv && ShouldSkipAwsOptions(option_config_)) {
+         continue;
+     }
+     break;
+   }
+   if (option_config_ >= kEnd) {
+#ifndef USE_AWS
+     // If not built for AWS, skip it
+     if (option_env_ + 1 == kAwsEnv) {
+       option_env_++;
+     }
+#endif
+     if (option_env_ + 1 >= kEndEnv) {
+       Destroy(last_options_);
+       return false;
+     } else {
+       option_env_++;
+       option_config_ = kDefault;
+       continue;
+     }
+   } else {
+     auto options = CurrentOptions();
+     options.create_if_missing = true;
+     DestroyAndReopen(options);
+     return true;
+   }
+ }
 }
 
 // Switch between different compaction styles.
@@ -564,6 +602,25 @@ Options DBTestBase::GetOptions(
       break;
   }
 
+  switch (option_env_) {
+    case kDefaultEnv: {
+      options.env = env_;
+      break;
+    }
+#ifdef USE_AWS
+    case kAwsEnv: {
+      assert(s3_env_);
+      options.env = s3_env_;
+      options.recycle_log_file_num = 0; // do not reuse log files
+      options.allow_mmap_reads = false; // mmap is incompatible with S3
+      break;
+    }
+#endif /* USE_AWS */
+
+    default:
+      break;
+  }
+
   if (options_override.filter_policy) {
     table_options.filter_policy = options_override.filter_policy;
     table_options.partition_filters = options_override.partition_filters;
@@ -572,11 +629,29 @@ Options DBTestBase::GetOptions(
   if (set_block_based_table_factory) {
     options.table_factory.reset(NewBlockBasedTableFactory(table_options));
   }
-  options.env = env_;
   options.create_if_missing = true;
   options.fail_if_options_file_error = true;
   return options;
 }
+
+#ifdef USE_AWS
+Env* DBTestBase::CreateNewAwsEnv(const std::string& prefix) {
+  // get AWS credentials
+  rocksdb::CloudEnvOptions coptions;
+  CloudEnv* cenv = nullptr;
+  std::string region;
+  coptions.TEST_Initialize("dbtest.", prefix, region);
+  Status st = AwsEnv::NewAwsEnv(Env::Default(), coptions, info_log_, &cenv);
+  ((CloudEnvImpl*)cenv)->TEST_DisableCloudManifest();
+  ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+  ROCKS_LOG_INFO(info_log_, "Created new aws env with path %s", prefix.c_str());
+  if (!st.ok()) {
+    Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "%s", st.ToString().c_str());
+  }
+  assert(st.ok() && cenv);
+  return cenv;
+}
+#endif
 
 void DBTestBase::CreateColumnFamilies(const std::vector<std::string>& cfs,
                                       const Options& options) {
@@ -657,6 +732,22 @@ void DBTestBase::Destroy(const Options& options, bool delete_cf_paths) {
   }
   Close();
   ASSERT_OK(DestroyDB(dbname_, options, column_families));
+#ifdef USE_AWS
+  if (s3_env_) {
+    AwsEnv* aenv = static_cast<AwsEnv *>(s3_env_);
+    Status st = aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(aenv->GetSrcBucketName(), dbname_);
+    ASSERT_TRUE(st.ok() || st.IsNotFound());
+    for (int r = 0; r < 10; ++r) {
+      // The existance is not propagated atomically in S3, so wait until
+      // IDENTITY file no longer exists.
+      if (aenv->FileExists(dbname_ + "/IDENTITY").ok()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 * (r + 1)));
+        continue;
+      }
+      break;
+    }
+  }
+#endif
 }
 
 Status DBTestBase::ReadOnlyReopen(const Options& options) {

@@ -29,6 +29,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "cloud/aws/aws_env.h"
 #include "db/db_impl/db_impl.h"
 #include "db/malloc_stats.h"
 #include "db/version_set.h"
@@ -899,6 +900,11 @@ DEFINE_int32(table_cache_numshardbits, 4, "");
 #ifndef ROCKSDB_LITE
 DEFINE_string(env_uri, "", "URI for registry Env lookup. Mutually exclusive"
               " with --hdfs.");
+DEFINE_string(aws_access_id, "", "Access id for AWS");
+DEFINE_string(aws_secret_key, "", "Secret key for AWS");
+DEFINE_string(aws_region, "", "AWS region");
+DEFINE_bool(keep_local_sst_files , true ,
+            "Keep all files in local storage as well as cloud storage");
 #endif  // ROCKSDB_LITE
 DEFINE_string(hdfs, "", "Name of hdfs environment. Mutually exclusive with"
               " --env_uri.");
@@ -1219,6 +1225,45 @@ enum RepFactory {
   kVectorRep,
   kHashLinkedList,
 };
+
+// create Factory for creating S3 Envs
+#ifdef USE_AWS
+rocksdb::Env* CreateAwsEnv(const std::string& dbpath ,
+                            std::unique_ptr<rocksdb::Env>* result) {
+  fprintf(stderr, "Creating AwsEnv for path %s\n", dbpath.c_str());
+  std::shared_ptr<rocksdb::Logger> info_log;
+  info_log.reset(new rocksdb::StderrLogger(
+                     rocksdb::InfoLogLevel::WARN_LEVEL));
+  rocksdb::CloudEnvOptions coptions;
+  std::string region;
+  if (FLAGS_aws_access_id.size() != 0) {
+    coptions.credentials.InitializeSimple(FLAGS_aws_access_id,
+                                          FLAGS_aws_secret_key);
+    region = FLAGS_aws_region;
+  }
+  assert(coptions.credentials.HasValid().ok());
+
+  coptions.keep_local_sst_files = FLAGS_keep_local_sst_files;
+  coptions.TEST_Initialize("dbbench.", "", region);
+  rocksdb::CloudEnv* s;
+  rocksdb::Status st = rocksdb::AwsEnv::NewAwsEnv(rocksdb::Env::Default(),
+                                                  coptions,
+                                                  std::move(info_log),
+                                                  &s);
+  assert(st.ok());
+  ((rocksdb::CloudEnvImpl*)s)->TEST_DisableCloudManifest();
+  result->reset(s);
+  return s;
+}
+
+static auto & registrar = rocksdb::ObjectLibrary::Default()->Register<rocksdb::Env>(
+         "s3://.*", [](const std::string& uri,
+                       std::unique_ptr<rocksdb::Env>* env_guard,
+                       std::string* /*errmsg*/) {
+  CreateAwsEnv(uri, env_guard);
+  return env_guard->get();
+});
+#endif /* USE_AWS */
 
 static enum RepFactory StringToRepFactory(const char* ctype) {
   assert(ctype);

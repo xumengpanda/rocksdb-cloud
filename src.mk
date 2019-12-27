@@ -233,6 +233,20 @@ LIB_SOURCES =                                                   \
   utilities/ttl/db_ttl_impl.cc                                  \
   utilities/write_batch_with_index/write_batch_with_index.cc    \
   utilities/write_batch_with_index/write_batch_with_index_internal.cc    \
+  cloud/aws/aws_env.cc                                          \
+  cloud/aws/aws_kafka.cc                                        \
+  cloud/aws/aws_kinesis.cc                                      \
+  cloud/aws/aws_retry.cc                                        \
+  cloud/aws/aws_s3.cc                                           \
+  cloud/db_cloud_impl.cc                                        \
+  cloud/cloud_env.cc                                            \
+  cloud/cloud_env_impl.cc                                       \
+  cloud/cloud_env_options.cc                                    \
+  cloud/cloud_log_controller.cc                                 \
+  cloud/cloud_storage_provider.cc                               \
+  cloud/manifest_reader.cc                                      \
+  cloud/purge.cc                                                \
+  cloud/cloud_manifest.cc                                       \
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\
@@ -291,6 +305,8 @@ FOLLY_SOURCES = \
   third-party/folly/folly/synchronization/WaitOptions.cpp                      \
 
 MAIN_SOURCES =                                                          \
+  cloud/db_cloud_test.cc                                                \
+  cloud/cloud_manifest_test.cc                                           \
   cache/cache_bench.cc                                                  \
   cache/cache_test.cc                                                   \
   db_stress_tool/db_stress.cc                                           \

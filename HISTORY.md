@@ -256,6 +256,7 @@
 * Add whole key bloom filter support in memtable.
 * Files written by `SstFileWriter` will now use dictionary compression if it is configured in the file writer's `CompressionOptions`.
 
+## 5.18.2 (01/31/2019)
 ### Public API Change
 * Disallow CompactionFilter::IgnoreSnapshots() = false, because it is not very useful and the behavior is confusing. The filter will filter everything if there is no snapshot declared by the time the compaction starts. However, users can define a snapshot after the compaction starts and before it finishes and this new snapshot won't be repeatable, because after the compaction finishes, some keys may be dropped.
 * CompactionPri = kMinOverlappingRatio also uses compensated file size, which boosts file with lots of tombstones to be compacted first.
@@ -293,6 +294,7 @@
 * Add xxhash64 checksum support
 * Introduced `MemoryAllocator`, which lets the user specify custom memory allocator for block based table.
 * Improved `DeleteRange` to prevent read performance degradation. The feature is no longer marked as experimental.
+* Enabled checkpoint on readonly db (DBImplReadOnly).
 
 ### Public API Change
 * `DBOptions::use_direct_reads` now affects reads issued by `BackupEngine` on the database's SSTs.
@@ -309,6 +311,8 @@
 * Fixed Get correctness bug in the presence of range tombstones where merge operands covered by a range tombstone always result in NotFound.
 * Start populating `NO_FILE_CLOSES` ticker statistic, which was always zero previously.
 * The default value of NewBloomFilterPolicy()'s argument use_block_based_builder is changed to false. Note that this new default may cause large temp memory usage when building very large SST files.
+* Fix a deadlock caused by compaction and file ingestion waiting for each other in the event of write stalls.
+* Make DB ignore dropped column families while committing results of atomic flush.
 
 ## 5.17.0 (10/05/2018)
 ### Public API Change
@@ -474,6 +478,8 @@
 * Provide lifetime hints when writing files on Linux. This reduces hardware write-amp on storage devices supporting multiple streams.
 * Add a DB stat, `NUMBER_ITER_SKIP`, which returns how many internal keys were skipped during iterations (e.g., due to being tombstones or duplicate versions of a key).
 * Add PerfContext counters, `key_lock_wait_count` and `key_lock_wait_time`, which measure the number of times transactions wait on key locks and total amount of time waiting.
+* Support dynamically changing `ColumnFamilyOptions::compaction_options_universal`.
+* Batch update stats at the end of each `Get`, rather than for each block cache access.
 
 ### Bug Fixes
 * Fix IOError on WAL write doesn't propagate to write group follower

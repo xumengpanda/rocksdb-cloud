@@ -20,6 +20,7 @@
 #include "rocksdb/comparator.h"
 #include "rocksdb/env.h"
 #include "rocksdb/listener.h"
+#include "rocksdb/pre_release_callback.h"
 #include "rocksdb/universal_compaction.h"
 #include "rocksdb/version.h"
 #include "rocksdb/write_buffer_manager.h"
@@ -221,6 +222,8 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   // Compression algorithm that will be used for the bottommost level that
   // contain files.
   //
+  // Default: kDisableCompressionOption (Disabled). The means that the setting
+  // specified via Options.compression applies to the bottommost level as well.
   // Default: kDisableCompressionOption (Disabled)
   CompressionType bottommost_compression = kDisableCompressionOption;
 
@@ -1354,6 +1357,9 @@ struct WriteOptions {
   // Default: false
   bool low_pri;
 
+  // See comments for PreReleaseCallback
+  PreReleaseCallback* pre_release_callback;
+
   // If true, this writebatch will maintain the last insert positions of each
   // memtable as hints in concurrent write. It can improve write performance
   // in concurrent writes if keys in one writebatch are sequential. In
@@ -1380,6 +1386,7 @@ struct WriteOptions {
         ignore_missing_column_families(false),
         no_slowdown(false),
         low_pri(false),
+        pre_release_callback(nullptr),
         memtable_insert_hint_per_batch(false),
         timestamp(nullptr) {}
 };

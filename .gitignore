@@ -78,5 +78,6 @@ db_logs/
 tp2/
 fbcode/
 fbcode
+travis-build/
 buckifier/*.pyc
 buckifier/__pycache__
