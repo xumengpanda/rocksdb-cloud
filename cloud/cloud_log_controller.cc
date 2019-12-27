@@ -11,6 +11,7 @@
 #include <iostream>
 
 #include "cloud/filename.h"
+#include "options/customizable_helper.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/status.h"
 #include "util/coding.h"
@@ -284,6 +285,15 @@ Status CloudLogController::Initialize(CloudEnv *env) {
   return status;
 }
   
+Status CloudLogController::Sanitize(DBOptions& db_opts, ColumnFamilyOptions& /*cf_opts*/) {
+  auto *cloud = db_opts.env->AsEnv<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cloud == nullptr) {
+    return Status::InvalidArgument("Invalid cloud environment");
+  } else {
+    return Prepare(cloud);
+  }
+}
+  
 Status CloudLogController::Prepare(CloudEnv *env) {
   if (env != nullptr) {
     status_ = Initialize(env);
@@ -296,6 +306,16 @@ Status CloudLogController::Prepare(CloudEnv *env) {
   return status_;
 }
 
+Status CloudLogController::Validate(const DBOptions& db_opts,
+                                    const ColumnFamilyOptions& /*cf_opts*/) const {
+  auto *cloud = db_opts.env->AsEnv<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cloud == nullptr || cloud != env_) {
+    return Status::InvalidArgument("Invalid cloud environment");
+  } else {
+    return Verify();
+  }
+}
+  
 Status CloudLogController::Verify() const {
   if (!status_.ok()) {
     return status_;
@@ -304,5 +324,10 @@ Status CloudLogController::Verify() const {
   }
   return status_;
 }
-  
+
+Status CloudLogController::CreateFromString(const std::string& value,
+                                              const ConfigOptions& opts,
+                                              std::shared_ptr<CloudLogController>* result) {
+  return LoadSharedObject<CloudLogController>(value, nullptr, opts, result);
+}
 }  // namespace rocksdb

@@ -10,6 +10,7 @@
 #include "cloud/cloud_env_impl.h"
 #include "cloud/filename.h"
 #include "file/filename.h"
+#include "options/customizable_helper.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
@@ -286,6 +287,26 @@ Status CloudStorageProvider::Prepare(CloudEnv *env) {
   return status_;
 }
 
+Status CloudStorageProvider::Sanitize(DBOptions& db_opts,
+                                      ColumnFamilyOptions& /*cf_opts*/) {
+  auto *cloud = db_opts.env->AsEnv<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cloud == nullptr) {
+    return Status::InvalidArgument("Invalid cloud environment");
+  } else {
+    return Prepare(cloud);
+  }
+}
+  
+Status CloudStorageProvider::Validate(const DBOptions& db_opts,
+                                    const ColumnFamilyOptions& /*cf_opts*/) const {
+  auto *cloud = db_opts.env->AsEnv<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cloud == nullptr || cloud != env_) {
+    return Status::InvalidArgument("Invalid cloud environment");
+  } else {
+    return Verify();
+  }
+}
+
 Status CloudStorageProvider::Verify() const {
   if (!status_.ok()) {
     return status_;
@@ -369,4 +390,9 @@ Status CloudStorageProvider::PutObject(const std::string& local_file,
   return DoPutObject(local_file, bucket_name, object_path, fsize);
 }
   
+Status CloudStorageProvider::CreateFromString(const std::string& value,
+                                              const ConfigOptions& opts,
+                                              std::shared_ptr<CloudStorageProvider>* result) {
+  return LoadSharedObject<CloudStorageProvider>(value, nullptr, opts, result);
+}
 }  // namespace rocksdb

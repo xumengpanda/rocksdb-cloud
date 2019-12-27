@@ -1,8 +1,10 @@
 //  Copyright (c) 2016-present, Rockset, Inc.  All rights reserved.
 //
 #pragma once
+#include "rocksdb/configurable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
+#include "rocksdb/utilities/options_type.h"
 
 #include <functional>
 #include <memory>
@@ -107,7 +109,7 @@ enum class CloudRequestOpType {
 using CloudRequestCallback =
     std::function<void(CloudRequestOpType, uint64_t, uint64_t, bool)>;
 
-class BucketOptions {
+class BucketOptions : public Configurable {
 private:
   std::string bucket_; // The suffix for the bucket name
   std::string prefix_; // The prefix for the bucket name.  Defaults to "rockset."
@@ -116,6 +118,7 @@ private:
   std::string name_;   // The name of the bucket (prefix_ + bucket_)
 public:
   BucketOptions();
+  static OptionTypeMap type_info;
   // Sets the name of the bucket to be the new bucket name.
   // If prefix is specified, the new bucket name will be [prefix][bucket]
   // If no prefix is specified, the bucket name will use the existing prefix
@@ -327,7 +330,9 @@ public:
   Env* base_env_; // The underlying env
 
   CloudEnv(const CloudEnvOptions& options, Env* base, const std::shared_ptr<Logger>& logger);
-
+  Status Sanitize(DBOptions& db_opts, ColumnFamilyOptions& cf_opts) override;
+  Status Validate(const DBOptions& db_opts, const ColumnFamilyOptions& cf_opts) const override;
+  const OptionTypeMap* GetOptionsTypeMap(const std::string& options) const override;
  public:
   std::shared_ptr<Logger> info_log_;  // informational messages
 
@@ -336,7 +341,8 @@ public:
   Env* GetBaseEnv() {
     return base_env_;
   }
-  virtual const char *Name() const { return "CloudEnv"; }
+  const char *Name() const override;
+  Env* Find(const std::string& name) override;
   const std::shared_ptr<Logger> & GetLogger() const {
     return info_log_;
   }

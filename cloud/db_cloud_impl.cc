@@ -8,6 +8,7 @@
 #include "cloud/aws/aws_env.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
+#include "env/composite_env_wrapper.h"
 #include "file/file_util.h"
 #include "logging/auto_roll_logger.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
@@ -65,8 +66,10 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
     CreateLoggerFromOptions(local_dbname, options, &options.info_log);
   }
 
-  CloudEnvImpl* cenv = static_cast<CloudEnvImpl*>(options.env);
-  if (!cenv->info_log_) {
+  auto *cenv = options.env->AsEnv<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cenv == nullptr) {
+    return Status::NotSupported("DBCloud requires a CloudEnv");
+  } else if (!cenv->info_log_) {
     cenv->info_log_ = options.info_log;
   }
   Env* local_env = cenv->GetBaseEnv();
@@ -75,39 +78,39 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
         local_dbname);  // MJR: TODO: Move into sanitize
   }
 
-  st = cenv->SanitizeDirectory(options, local_dbname, read_only);
-
-  if (st.ok()) {
-    st = cenv->LoadCloudManifest(local_dbname, read_only);
-  }
-  if (!st.ok()) {
-    return st;
+  auto *cimpl = cenv->AsEnv<CloudEnvImpl>(CloudEnvImpl::kCloudEnvImplName);
+  if (cimpl != nullptr) {
+    st = cimpl->SanitizeDirectory(options, local_dbname, read_only);
+    if (st.ok()) {
+     st = cimpl->LoadCloudManifest(local_dbname, read_only);
+    }
+    
+    if (!st.ok()) {
+      return st;
+    }
   }
   // If a persistent cache path is specified, then we set it in the options.
   if (!persistent_cache_path.empty() && persistent_cache_size_gb) {
     // Get existing options. If the persistent cache is already set, then do
     // not make any change. Otherwise, configure it.
-    void* bopt = options.table_factory->GetOptions();
-    if (bopt != nullptr) {
-      BlockBasedTableOptions* tableopt =
-          static_cast<BlockBasedTableOptions*>(bopt);
-      if (!tableopt->persistent_cache) {
-        std::shared_ptr<PersistentCache> pcache;
-        st =
-            NewPersistentCache(options.env, persistent_cache_path,
-                               persistent_cache_size_gb * 1024L * 1024L * 1024L,
-                               options.info_log, false, &pcache);
-        if (st.ok()) {
-          tableopt->persistent_cache = pcache;
-          Log(InfoLogLevel::INFO_LEVEL, options.info_log,
-              "Created persistent cache %s with size %" PRIu64 "GB",
-              persistent_cache_path.c_str(), persistent_cache_size_gb);
-        } else {
-          Log(InfoLogLevel::INFO_LEVEL, options.info_log,
-              "Unable to create persistent cache %s. %s",
-              persistent_cache_path.c_str(), st.ToString().c_str());
+    auto * tableopt =
+      options.table_factory->GetOptions<BlockBasedTableOptions>(TableFactory::kBlockBasedTableOpts);
+    if (tableopt != nullptr && !tableopt->persistent_cache) {
+      std::shared_ptr<PersistentCache> pcache;
+      st =
+        NewPersistentCache(options.env, persistent_cache_path,
+                           persistent_cache_size_gb * 1024L * 1024L * 1024L,
+                           options.info_log, false, &pcache);
+      if (st.ok()) {
+        tableopt->persistent_cache = pcache;
+        Log(InfoLogLevel::INFO_LEVEL, options.info_log,
+            "Created persistent cache %s with size %" PRIu64 "GB",
+            persistent_cache_path.c_str(), persistent_cache_size_gb);
+      } else {
+        Log(InfoLogLevel::INFO_LEVEL, options.info_log,
+            "Unable to create persistent cache %s. %s",
+            persistent_cache_path.c_str(), st.ToString().c_str());
           return st;
-        }
       }
     }
   }
@@ -152,7 +155,7 @@ Status DBCloudImpl::Savepoint() {
         "Savepoint could not get dbid %s", st.ToString().c_str());
     return st;
   }
-  CloudEnvImpl* cenv = static_cast<CloudEnvImpl*>(GetEnv());
+  auto * cenv = GetEnv()->AsEnv<CloudEnvImpl>(CloudEnvImpl::kCloudEnvImplName);
 
   // If there is no destination bucket, then nothing to do
   if (!cenv->HasDestBucket()) {
@@ -235,7 +238,7 @@ Status DBCloudImpl::DoCheckpointToCloud(
     const BucketOptions& destination, const CheckpointToCloudOptions& options) {
   std::vector<std::string> live_files;
   uint64_t manifest_file_size{0};
-  auto cenv = static_cast<CloudEnvImpl*>(GetEnv());
+  auto cenv = GetEnv()->AsEnv<CloudEnvImpl>(CloudEnvImpl::kCloudEnvImplName);
   auto base_env = cenv->GetBaseEnv();
 
   auto st =
@@ -273,9 +276,9 @@ Status DBCloudImpl::DoCheckpointToCloud(
   auto current_epoch = cenv->GetCloudManifest()->GetCurrentEpoch().ToString();
   auto manifest_fname = ManifestFileWithEpoch("", current_epoch);
   auto tmp_manifest_fname = manifest_fname + ".tmp";
-  st =
-      CopyFile(base_env, GetName() + "/" + manifest_fname,
-               GetName() + "/" + tmp_manifest_fname, manifest_file_size, false);
+  st = cenv->CopyManifestFile(GetName() + "/" + manifest_fname,
+                              GetName() + "/" + tmp_manifest_fname,
+                              manifest_file_size, false);
   if (!st.ok()) {
     return st;
   }

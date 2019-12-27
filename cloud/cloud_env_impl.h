@@ -22,10 +22,14 @@ class CloudEnvImpl : public CloudEnv {
   friend class CloudEnv;
 
  public:
+  static const std::string kCloudEnvImplName /*="CloudEnvImpl"*/;
+  
   // Constructor
   CloudEnvImpl(const CloudEnvOptions & options, Env* base_env, const std::shared_ptr<Logger> & logger);
 
   virtual ~CloudEnvImpl();
+  virtual const char *Name() const override;
+  Env* Find(const std::string& name) override;
 
   Status SanitizeDirectory(const DBOptions& options,
                            const std::string& clone_name, bool read_only);
@@ -107,6 +111,9 @@ class CloudEnvImpl : public CloudEnv {
   }
   Status CopyLocalFileToDest(const std::string& local_name,
                              const std::string& cloud_name) override;
+  Status CopyManifestFile(const std::string& source,
+                          const std::string& destination, uint64_t size,
+                          bool use_fsync);
   void RemoveFileFromDeletionQueue(const std::string& filename);
   virtual Status Prepare() override;
  protected:

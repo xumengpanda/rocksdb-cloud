@@ -6,8 +6,10 @@
 #include "cloud/cloud_env_impl.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
+#include "env/composite_env_wrapper.h"
 #include "file/filename.h"
 #include "file/file_util.h"
+#include "file/writable_file_writer.h"
 #include "port/likely.h"
 #include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
@@ -15,7 +17,6 @@
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
-#include "util/file_reader_writer.h"
 #include "util/xxhash.h"
 
 namespace rocksdb {
@@ -120,6 +121,8 @@ detail::JobExecutor* GetJobExecutor() {
   return &executor;
 }
 
+const std::string CloudEnvImpl::kCloudEnvImplName ="CloudEnvImpl";
+
 CloudEnvImpl::CloudEnvImpl(const CloudEnvOptions& opts, Env* base, const std::shared_ptr<Logger> & logger)
   : CloudEnv(opts, base, logger), purger_is_running_(true) {}
 
@@ -137,7 +140,19 @@ CloudEnvImpl::~CloudEnvImpl() {
   }
   StopPurger();
 }
+
+const char *CloudEnvImpl::Name() const {
+  return kCloudEnvImplName.c_str();
+}
   
+Env* CloudEnvImpl::Find(const std::string& name) {
+  if (name == kCloudEnvImplName) {
+    return this;
+  } else {
+    return CloudEnv::Find(name);
+  }
+}
+
 void CloudEnvImpl::StopPurger() {
   {
     std::lock_guard<std::mutex> lk(purger_lock_);
@@ -164,7 +179,7 @@ Status CloudEnvImpl::LoadLocalCloudManifest(const std::string& dbname) {
   }
   return CloudManifest::LoadFromLog(
     std::unique_ptr<SequentialFileReader>(
-          new SequentialFileReader(std::move(file), cloudManifestFile)),
+          new SequentialFileReader(NewLegacySequentialFileWrapper(file), cloudManifestFile)),
       &cloud_manifest_);
 }
 
@@ -305,7 +320,7 @@ Status CloudEnvImpl::writeCloudManifest(CloudManifest* manifest,
   Status s = local_env->NewWritableFile(tmp_fname, &file, EnvOptions());
   if (s.ok()) {
     s = manifest->WriteToLog(std::unique_ptr<WritableFileWriter>(
-        new WritableFileWriter(std::move(file), tmp_fname, EnvOptions())));
+        new WritableFileWriter(NewLegacyWritableFileWrapper(std::move(file)), tmp_fname, EnvOptions())));
   }
   if (s.ok()) {
     s = local_env->RenameFile(tmp_fname, fname);
@@ -1020,8 +1035,8 @@ Status CloudEnvImpl::RollNewEpoch(const std::string& local_dbname) {
     // However, we don't move here, we copy. If we moved and crashed immediately
     // after (before writing CLOUDMANIFEST), we'd corrupt our database. The old
     // MANIFEST file will be cleaned up in DeleteInvisibleFiles().
-    st = CopyFile(GetBaseEnv(), ManifestFileWithEpoch(local_dbname, oldEpoch),
-                  ManifestFileWithEpoch(local_dbname, newEpoch), 0, true);
+    st = CopyManifestFile(ManifestFileWithEpoch(local_dbname, oldEpoch),
+                          ManifestFileWithEpoch(local_dbname, newEpoch), 0, true);
     if (!st.ok()) {
       return st;
     }
@@ -1060,6 +1075,13 @@ Status CloudEnvImpl::CopyLocalFileToDest(const std::string& local_name,
   RemoveFileFromDeletionQueue(basename(local_name));
   return cloud_env_options.storage_provider->PutObject(local_name, GetDestBucketName(),
                                                        dest_name);
+}
+
+Status CloudEnvImpl::CopyManifestFile(const std::string& source,
+                                      const std::string& destination, uint64_t size,
+                                      bool use_fsync) {
+  LegacyFileSystemWrapper fs(GetBaseEnv());
+  return CopyFile(&fs, source, destination, size, use_fsync);
 }
 
 void CloudEnvImpl::RemoveFileFromDeletionQueue(const std::string& filename) {

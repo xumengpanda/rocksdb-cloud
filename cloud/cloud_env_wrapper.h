@@ -108,7 +108,7 @@ class MockCloudEnv : public CloudEnv {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
   explicit MockCloudEnv(const CloudEnvOptions & opts = CloudEnvOptions())
-    : CloudEnv(opts, Env::Default()) {
+    : CloudEnv(opts, Env::Default(), nullptr) {
     notsup_ = Status::NotSupported();
   }
 

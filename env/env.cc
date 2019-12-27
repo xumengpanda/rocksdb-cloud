@@ -13,6 +13,7 @@
 #include "env/composite_env_wrapper.h"
 #include "logging/env_logger.h"
 #include "memory/arena.h"
+#include "options/customizable_helper.h"
 #include "options/db_options.h"
 #include "port/port.h"
 #include "port/sys_time.h"
@@ -30,12 +31,24 @@ Status Env::NewLogger(const std::string& fname,
   return NewEnvLogger(fname, this, result);
 }
 
+static bool LoadEnv(const std::string& id, Env** result) {
+  bool success = true;
+  if (id == "Default") {
+    *result = Env::Default();
+  } else if (id == "PosixEnv") {
+    *result = Env::Default();
+  } else {
+    success = false;
+  }
+  return success;
+}
+  
 Status Env::CreateFromString(const std::string& value, const ConfigOptions& options,
                              Env** result) {
   Env* env = *result;
   Status s;
 #ifndef ROCKSDB_LITE
-  s = options.registry->NewStaticObject<Env>(value, &env);
+  s = LoadStaticObject<Env>(value, LoadEnv, options, &env);
 #else
   (void)options;
   s = Status::NotSupported("Cannot load environment in LITE mode: ", value);

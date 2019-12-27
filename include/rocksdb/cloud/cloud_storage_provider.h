@@ -4,6 +4,7 @@
 
 #include <unordered_map>
 
+#include "rocksdb/customizable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -112,12 +113,15 @@ class CloudStorageWritableFile : public WritableFile {
   virtual const char* Name() const { return "cloud"; }
 };
 
-class CloudStorageProvider  {
+class CloudStorageProvider : public Customizable {
  public:
   static Status CreateS3Provider(std::unique_ptr<CloudStorageProvider>* result);
+  static Status CreateFromString(const std::string&value,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<CloudStorageProvider>* result);  
   virtual ~CloudStorageProvider();
   static const char *Type() { return "CloudStorageProvider"; }
-  virtual const char* Name() const { return "cloud"; }
+  virtual const char* Name() const override { return "cloud"; }
   virtual Status CreateBucket(const std::string& bucket_name) = 0;
   virtual Status ExistsBucket(const std::string& bucket_name) = 0;
 
@@ -188,6 +192,8 @@ class CloudStorageProvider  {
   virtual Status Verify() const;
  protected:
   virtual Status Initialize(CloudEnv* env);
+  Status Sanitize(DBOptions& db_opts, ColumnFamilyOptions& cf_opts) override;
+  Status Validate(const DBOptions& db_opts, const ColumnFamilyOptions& cf_opts) const override;
   
 
   virtual Status DoNewCloudReadableFile(

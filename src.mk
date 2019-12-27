@@ -238,20 +238,6 @@ LIB_SOURCES =                                                   \
   utilities/ttl/db_ttl_impl.cc                                  \
   utilities/write_batch_with_index/write_batch_with_index.cc    \
   utilities/write_batch_with_index/write_batch_with_index_internal.cc    \
-  cloud/aws/aws_env.cc                                          \
-  cloud/aws/aws_kafka.cc                                        \
-  cloud/aws/aws_kinesis.cc                                      \
-  cloud/aws/aws_retry.cc                                        \
-  cloud/aws/aws_s3.cc                                           \
-  cloud/db_cloud_impl.cc                                        \
-  cloud/cloud_env.cc                                            \
-  cloud/cloud_env_impl.cc                                       \
-  cloud/cloud_env_options.cc                                    \
-  cloud/cloud_log_controller.cc                                 \
-  cloud/cloud_storage_provider.cc                               \
-  cloud/manifest_reader.cc                                      \
-  cloud/purge.cc                                                \
-  cloud/cloud_manifest.cc                                       \
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\
@@ -267,6 +253,22 @@ else
 LIB_SOURCES_ASM =
 LIB_SOURCES_C =
 endif
+
+CLOUD_LIB_SOURCES =                                             \
+  cloud/aws/aws_env.cc                                          \
+  cloud/aws/aws_kafka.cc                                        \
+  cloud/aws/aws_kinesis.cc                                      \
+  cloud/aws/aws_retry.cc                                        \
+  cloud/aws/aws_s3.cc                                           \
+  cloud/db_cloud_impl.cc                                        \
+  cloud/cloud_env.cc                                            \
+  cloud/cloud_env_impl.cc                                       \
+  cloud/cloud_env_options.cc                                    \
+  cloud/cloud_log_controller.cc                                 \
+  cloud/cloud_storage_provider.cc                               \
+  cloud/manifest_reader.cc                                      \
+  cloud/purge.cc                                                \
+  cloud/cloud_manifest.cc                                       \
 
 TOOL_LIB_SOURCES =                                              \
   tools/ldb_cmd.cc                                              \
@@ -333,10 +335,12 @@ BENCH_MAIN_SOURCES =                                                    \
   #util/log_write_bench.cc                                               \
 
 TEST_MAIN_SOURCES =                                                     \
+  cloud/aws/aws_options_test.cc                                         \
+  cloud/cloud_manifest_test.cc                                          \
+  cloud/cloud_options_test.cc                                           \
+  cloud/db_cloud_test.cc                                                \
   cache/cache_test.cc                                                   \
   cache/lru_cache_test.cc                                               \
-  cloud/db_cloud_test.cc                                                \
-  cloud/cloud_manifest_test.cc                                          \
   db/column_family_test.cc                                              \
   db/compact_files_test.cc                                              \
   db/compaction/compaction_iterator_test.cc                             \
@@ -440,7 +444,6 @@ TEST_MAIN_SOURCES =                                                     \
   table/sst_file_reader_test.cc                                         \
   table/table_test.cc                                                   \
   tools/block_cache_analyzer/block_cache_trace_analyzer_test.cc         \
-  #tools/db_bench_tool_test.cc                                           \
   tools/db_sanity_test.cc                                               \
   tools/ldb_cmd_test.cc                                                 \
   tools/reduce_levels_test.cc                                           \
@@ -488,6 +491,7 @@ TEST_MAIN_SOURCES =                                                     \
   utilities/ttl/ttl_test.cc                                             \
   utilities/util_merge_operators_test.cc                                \
   utilities/write_batch_with_index/write_batch_with_index_test.cc       \
+  #tools/db_bench_tool_test.cc                                           \
 
 JNI_NATIVE_SOURCES =                                          \
   java/rocksjni/backupenginejni.cc                            \

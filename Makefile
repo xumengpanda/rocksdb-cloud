@@ -456,6 +456,9 @@ ALL_SOURCES  = $(LIB_SOURCES) $(TEST_LIB_SOURCES) $(MOCK_LIB_SOURCES) $(GTEST_DI
 ALL_SOURCES += $(TOOL_LIB_SOURCES) $(BENCH_LIB_SOURCES) $(ANALYZER_LIB_SOURCES) $(STRESS_LIB_SOURCES)
 ALL_SOURCES += $(TEST_MAIN_SOURCES) $(TOOL_MAIN_SOURCES) $(BENCH_MAIN_SOURCES)
 
+CLOUD_OBJECTS = $(patsubst %.cc, $(OBJ_DIR)/%.o, $(CLOUD_LIB_SOURCES))
+ALL_SOURCES += $(CLOUD_LIB_SOURCES) 
+
 TESTS = $(patsubst %.cc, %, $(notdir $(TEST_MAIN_SOURCES)))
 
 ifeq ($(USE_FOLLY_DISTRIBUTED_MUTEX),1)
@@ -528,17 +531,25 @@ SHARED_STRESS_LIBRARY = ${LIBNAME}_stress$(LIBDEBUG).$(PLATFORM_SHARED_EXT)
 
 ALL_SHARED_LIBS = $(SHARED1) $(SHARED2) $(SHARED3) $(SHARED4) $(SHARED_TEST_LIBRARY) $(SHARED_TOOLS_LIBRARY) $(SHARED_STRESS_LIBRARY)
 
+STATIC_CLOUD_LIBRARY =  ${LIBNAME}_cloud$(LIBDEBUG).a
+SHARED_CLOUD_LIBRARY = ${LIBNAME}_cloud$(LIBDEBUG).$(PLATFORM_SHARED_EXT)
+ALL_STATIC_LIBS += $(STATIC_CLOUD_LIBRARY)
+ALL_SHARED_LIBS += $(SHARED_CLOUD_LIBRARY)
+
 ifeq ($(LIB_MODE),shared)
 LIBRARY=$(SHARED1)
 TEST_LIBRARY=$(SHARED_TEST_LIBRARY)
 TOOLS_LIBRARY=$(SHARED_TOOLS_LIBRARY)
 STRESS_LIBRARY=$(SHARED_STRESS_LIBRARY)
+CLOUD_LIBRARY=$(SHARED_CLOUD_LIBRARY)
 else
 LIBRARY=$(STATIC_LIBRARY)
 TEST_LIBRARY=$(STATIC_TEST_LIBRARY)
 TOOLS_LIBRARY=$(STATIC_TOOLS_LIBRARY)
 STRESS_LIBRARY=$(STATIC_STRESS_LIBRARY)
+CLOUD_LIBRARY=$(STATIC_CLOUD_LIBRARY)
 endif
+
 ROCKSDB_MAJOR = $(shell egrep "ROCKSDB_MAJOR.[0-9]" include/rocksdb/version.h | cut -d ' ' -f 3)
 ROCKSDB_MINOR = $(shell egrep "ROCKSDB_MINOR.[0-9]" include/rocksdb/version.h | cut -d ' ' -f 3)
 ROCKSDB_PATCH = $(shell egrep "ROCKSDB_PATCH.[0-9]" include/rocksdb/version.h | cut -d ' ' -f 3)
@@ -598,7 +609,7 @@ all_but_some_tests: $(LIBRARY) $(BENCHMARKS) tools tools_lib test_libs $(SUBSET)
 
 static_lib: $(STATIC_LIBRARY)
 
-shared_lib: $(SHARED)
+shared_lib: $(SHARED) $(SHARED_CLOUD_LIBRARY)
 
 stress_lib: $(STRESS_LIBRARY)
 
@@ -1024,6 +1035,10 @@ $(STATIC_STRESS_LIBRARY): $(TESTUTIL) $(ANALYZE_OBJECTS) $(STRESS_OBJECTS)
 	$(AM_V_AR)rm -f $@ $(SHARED_STRESS_LIBRARY)
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
 
+$(STATIC_CLOUD_LIBRARY): $(CLOUD_OBJECTS)
+	$(AM_V_AR)rm -f $@  $(SHARED_CLOUD_LIBRARY)
+	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
+
 $(SHARED_TEST_LIBRARY): $(TEST_OBJECTS) $(SHARED1)
 	$(AM_V_AR)rm -f $@ $(STATIC_TEST_LIBRARY)
 	$(AM_SHARE)
@@ -1036,11 +1051,15 @@ $(SHARED_STRESS_LIBRARY): $(TESTUTIL) $(ANALYZE_OBJECTS) $(STRESS_OBJECTS) $(SHA
 	$(AM_V_AR)rm -f $@ $(STATIC_STRESS_LIBRARY)
 	$(AM_SHARE)
 
+$(SHARED_CLOUD_LIBRARY): $(CLOUD_OBJECTS) $(SHARED3)
+	$(AM_V_AR)rm -f $@ $(STATIC_CLOUD_LIBRARY)
+	$(AM_SHARE)
+
 librocksdb_env_basic_test.a: $(OBJ_DIR)/env/env_basic_test.o $(LIB_OBJECTS) $(TESTHARNESS)
 	$(AM_V_AR)rm -f $@
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
 
-db_bench: $(OBJ_DIR)/tools/db_bench.o $(BENCH_OBJECTS) $(TXNTESTUTIL) $(TESTUTIL) $(LIBRARY)
+db_bench: $(OBJ_DIR)/tools/db_bench.o $(BENCH_OBJECTS) $(TXNTESTUTIL) $(TESTUTIL) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 trace_analyzer: $(OBJ_DIR)/tools/trace_analyzer.o $(ANALYZE_OBJECTS) $(TOOLS_LIBRARY) $(LIBRARY)
@@ -1108,7 +1127,7 @@ coding_test: $(OBJ_DIR)/util/coding_test.o $(TEST_LIBRARY) $(LIBRARY)
 hash_test: $(OBJ_DIR)/util/hash_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-random_test: util/random_test.o  $(TEST_LIBRARY) $(LIBRARY)
+random_test: $(OBJ_DIR)/util/random_test.o  $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 option_change_migration_test: $(OBJ_DIR)/utilities/option_change_migration/option_change_migration_test.o $(TEST_LIBRARY) $(LIBRARY)
@@ -1446,7 +1465,7 @@ thread_list_test: $(OBJ_DIR)/util/thread_list_test.o $(TEST_LIBRARY) $(LIBRARY)
 compact_files_test: $(OBJ_DIR)/db/compact_files_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
- options_test: $(OBJ_DIR)/options/options_test.o $(TEST_LIBRARY) $(LIBRARY)
+options_test: $(OBJ_DIR)/options/options_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 configurable_test: $(OBJ_DIR)/options/configurable_test.o $(TEST_LIBRARY) $(LIBRARY)
@@ -1456,7 +1475,6 @@ customizable_test: $(OBJ_DIR)/options/customizable_test.o $(TEST_LIBRARY) $(LIBR
 	$(AM_LINK)
 
 options_settable_test: $(OBJ_DIR)/options/options_settable_test.o $(TEST_LIBRARY) $(LIBRARY)
->>>>>>> me/Makefile
 	$(AM_LINK)
 
 options_util_test: $(OBJ_DIR)/utilities/options/options_util_test.o $(TEST_LIBRARY) $(LIBRARY)
@@ -1528,8 +1546,19 @@ ldb_cmd_test: $(OBJ_DIR)/tools/ldb_cmd_test.o $(TOOLS_LIBRARY) $(TEST_LIBRARY) $
 ldb: $(OBJ_DIR)/tools/ldb.o $(TOOLS_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-db_cloud_test: $(OBJ_DIR)/cloud/db_cloud_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+db_cloud_test: $(OBJ_DIR)/cloud/db_cloud_test.o  $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
+
+cloud_options_test: $(OBJ_DIR)/cloud/cloud_options_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
+ifeq ($(LIB_MODE),shared)
+aws_options_test: $(OBJ_DIR)/cloud/aws/aws_options_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+else
+aws_options_test: $(OBJ_DIR)/cloud/aws/aws_options_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+endif
 
 cloud_manifest_test: $(OBJ_DIR)/cloud/cloud_manifest_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)

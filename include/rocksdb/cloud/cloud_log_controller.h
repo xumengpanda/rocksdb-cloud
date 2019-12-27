@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 
+#include "rocksdb/customizable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
@@ -48,7 +49,7 @@ class CloudLogWritableFile : public WritableFile {
   Status status_;
 };
 
-class CloudLogController {
+class CloudLogController : public Customizable {
  public:
   static constexpr const char* kCacheDir = "/tmp/ROCKSET";
 
@@ -60,6 +61,9 @@ class CloudLogController {
 
   virtual ~CloudLogController();
   static const char *Type() { return "CloudLogController"; }
+  static Status CreateFromString(const std::string&value,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<CloudLogController>* result);  
   static Status CreateKinesisController(std::unique_ptr<CloudLogController>* result);
   static Status CreateKafkaController(std::unique_ptr<CloudLogController>* result);
   // Create a stream to store all log files.
@@ -77,7 +81,7 @@ class CloudLogController {
                                                    const EnvOptions& options) = 0;
 
   // Returns name of the cloud log type (Kinesis, etc.).
-  virtual const char* Name() const { return "cloudlog"; }
+  const char* Name() const override { return "cloudlog"; }
 
   // Directory where files are cached locally.
   const std::string& GetCacheDir() const { return cache_dir_; }
@@ -107,6 +111,8 @@ class CloudLogController {
   std::string cache_dir_;
   CloudLogController() : running_(false) { }
   virtual Status Initialize(CloudEnv *env);
+  Status Sanitize(DBOptions& db_opts, ColumnFamilyOptions& cf_opts) override;
+  Status Validate(const DBOptions& db_opts, const ColumnFamilyOptions& cf_opts) const override;
   // A cache of pathnames to their open file _escriptors
   std::map<std::string, std::unique_ptr<RandomRWFile>> cache_fds_;
 
