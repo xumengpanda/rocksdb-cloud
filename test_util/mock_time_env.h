@@ -12,6 +12,7 @@ namespace rocksdb {
 class MockTimeEnv : public EnvWrapper {
  public:
   explicit MockTimeEnv(Env* base) : EnvWrapper(base) {}
+  const char *Name() const override { return "MockTimeEnv"; }
 
   virtual Status GetCurrentTime(int64_t* time) override {
     assert(time != nullptr);

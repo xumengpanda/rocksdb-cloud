@@ -37,9 +37,6 @@ static int DecodeValue(void* v) {
   return static_cast<int>(reinterpret_cast<uintptr_t>(v));
 }
 
-const std::string kLRU = "lru";
-const std::string kClock = "clock";
-
 void dumbDeleter(const Slice& /*key*/, void* /*value*/) {}
 
 void eraseDeleter(const Slice& /*key*/, void* value) {
@@ -77,10 +74,10 @@ class CacheTest : public testing::TestWithParam<std::string> {
 
   std::shared_ptr<Cache> NewCache(size_t capacity) {
     auto type = GetParam();
-    if (type == kLRU) {
+    if (type == Cache::kLRUCacheName) {
       return NewLRUCache(capacity);
     }
-    if (type == kClock) {
+    if (type == Cache::kClockCacheName) {
       return NewClockCache(capacity);
     }
     return nullptr;
@@ -90,7 +87,7 @@ class CacheTest : public testing::TestWithParam<std::string> {
       size_t capacity, int num_shard_bits, bool strict_capacity_limit,
       CacheMetadataChargePolicy charge_policy = kDontChargeCacheMetadata) {
     auto type = GetParam();
-    if (type == kLRU) {
+    if (type == Cache::kLRUCacheName) {
       LRUCacheOptions co;
       co.capacity = capacity;
       co.num_shard_bits = num_shard_bits;
@@ -99,7 +96,7 @@ class CacheTest : public testing::TestWithParam<std::string> {
       co.metadata_charge_policy = charge_policy;
       return NewLRUCache(co);
     }
-    if (type == kClock) {
+    if (type == Cache::kClockCacheName) {
       return NewClockCache(capacity, num_shard_bits, strict_capacity_limit,
                            charge_policy);
     }
@@ -759,11 +756,14 @@ TEST_P(CacheTest, GetCharge) {
 std::shared_ptr<Cache> (*new_clock_cache_func)(
     size_t, int, bool, CacheMetadataChargePolicy) = NewClockCache;
 INSTANTIATE_TEST_CASE_P(CacheTestInstance, CacheTest,
-                        testing::Values(kLRU, kClock));
+                        testing::Values(Cache::kLRUCacheName,
+                                        Cache::kClockCacheName));
 #else
-INSTANTIATE_TEST_CASE_P(CacheTestInstance, CacheTest, testing::Values(kLRU));
+INSTANTIATE_TEST_CASE_P(CacheTestInstance, CacheTest,
+                        testing::Values(Cache::kLRUCacheName));
 #endif  // SUPPORT_CLOCK_CACHE
-INSTANTIATE_TEST_CASE_P(CacheTestInstance, LRUCacheTest, testing::Values(kLRU));
+INSTANTIATE_TEST_CASE_P(CacheTestInstance, LRUCacheTest,
+                        testing::Values(Cache::kLRUCacheName));
 
 }  // namespace rocksdb
 

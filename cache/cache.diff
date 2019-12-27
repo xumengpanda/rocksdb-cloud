@@ -1,0 +1,67 @@
+Only in rocksdb/cache: cache.cc~
+diff -cr rocksdb/cache/cache_test.cc rocksdb-cloud/cache/cache_test.cc
+*** rocksdb/cache/cache_test.cc	2019-12-09 17:20:21.000000000 -0500
+--- rocksdb-cloud/cache/cache_test.cc	2019-12-10 11:32:35.000000000 -0500
+***************
+*** 14,19 ****
+--- 14,20 ----
+  #include <iostream>
+  #include <string>
+  #include <vector>
++ 
+  #include "cache/clock_cache.h"
+  #include "cache/lru_cache.h"
+  #include "test_util/testharness.h"
+diff -cr rocksdb/cache/clock_cache.cc rocksdb-cloud/cache/clock_cache.cc
+*** rocksdb/cache/clock_cache.cc	2019-12-09 17:20:21.000000000 -0500
+--- rocksdb-cloud/cache/clock_cache.cc	2019-12-10 11:40:09.000000000 -0500
+***************
+*** 33,43 ****
+  #ifndef ROCKSDB_USE_RTTI
+  #define TBB_USE_EXCEPTIONS 0
+  #endif
+- #include "tbb/concurrent_hash_map.h"
+- 
+  #include "cache/sharded_cache.h"
+  #include "port/malloc.h"
+  #include "port/port.h"
+  #include "util/autovector.h"
+  #include "util/mutexlock.h"
+  
+--- 33,42 ----
+  #ifndef ROCKSDB_USE_RTTI
+  #define TBB_USE_EXCEPTIONS 0
+  #endif
+  #include "cache/sharded_cache.h"
+  #include "port/malloc.h"
+  #include "port/port.h"
++ #include "tbb/concurrent_hash_map.h"
+  #include "util/autovector.h"
+  #include "util/mutexlock.h"
+  
+diff -cr rocksdb/cache/lru_cache.h rocksdb-cloud/cache/lru_cache.h
+*** rocksdb/cache/lru_cache.h	2019-12-10 16:15:03.000000000 -0500
+--- rocksdb-cloud/cache/lru_cache.h	2019-12-10 11:32:42.000000000 -0500
+***************
+*** 11,17 ****
+  #include <string>
+  
+  #include "cache/sharded_cache.h"
+- 
+  #include "port/malloc.h"
+  #include "port/port.h"
+  #include "util/autovector.h"
+--- 11,16 ----
+diff -cr rocksdb/cache/lru_cache_test.cc rocksdb-cloud/cache/lru_cache_test.cc
+*** rocksdb/cache/lru_cache_test.cc	2019-12-04 15:53:29.000000000 -0500
+--- rocksdb-cloud/cache/lru_cache_test.cc	2019-12-10 11:33:20.000000000 -0500
+***************
+*** 7,12 ****
+--- 7,13 ----
+  
+  #include <string>
+  #include <vector>
++ 
+  #include "port/port.h"
+  #include "test_util/testharness.h"
+  

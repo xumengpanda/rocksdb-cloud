@@ -700,23 +700,34 @@ void ClockCacheShard::EraseUnRefEntries() {
   Cleanup(context);
 }
 
-class ClockCache final : public ShardedCache {
+class ClockCache : public ShardedCache {
  public:
-  ClockCache(size_t capacity, int num_shard_bits, bool strict_capacity_limit,
-             CacheMetadataChargePolicy metadata_charge_policy)
-      : ShardedCache(capacity, num_shard_bits, strict_capacity_limit) {
-    int num_shards = 1 << num_shard_bits;
-    shards_ = new ClockCacheShard[num_shards];
-    for (int i = 0; i < num_shards; i++) {
-      shards_[i].set_metadata_charge_policy(metadata_charge_policy);
-    }
-    SetCapacity(capacity);
-    SetStrictCapacityLimit(strict_capacity_limit);
-  }
+  ClockCache(const ShardedCacheOptions& options = new ShardedCacheOptions())
+      : ShardedCache(clock_options_),
+        clock_options_(options),
+        shards_(nullptr) {}
 
   ~ClockCache() override { delete[] shards_; }
 
-  const char* Name() const override { return "ClockCache"; }
+  Status SetupCache() override {
+    Status s;
+    if (shards_ == nullptr) {
+      s = ShardedCache::SetupCache();
+      if (s.ok()) {
+        int num_shards = 1 << clock_options_.num_shard_bits;
+        shards_ = new ClockCacheShard[num_shards];
+        for (int i = 0; i < num_shards; i++) {
+          shards_[i].set_metadata_charge_policy(
+              clock_options_.metadata_charge_policy);
+        }
+        SetCapacity(clock_options_.capacity);
+        SetStrictCapacityLimit(clock_options_.strict_capacity_limit);
+      }
+    }
+    return s;
+  }
+
+  const char* Name() const override { return kClockCacheName.c_str(); }
 
   CacheShard* GetShard(int shard) override {
     return reinterpret_cast<CacheShard*>(&shards_[shard]);
@@ -741,6 +752,7 @@ class ClockCache final : public ShardedCache {
   void DisownData() override { shards_ = nullptr; }
 
  private:
+  ShardedCacheOptions clock_options_;
   ClockCacheShard* shards_;
 };
 
@@ -749,11 +761,15 @@ class ClockCache final : public ShardedCache {
 std::shared_ptr<Cache> NewClockCache(
     size_t capacity, int num_shard_bits, bool strict_capacity_limit,
     CacheMetadataChargePolicy metadata_charge_policy) {
-  if (num_shard_bits < 0) {
-    num_shard_bits = GetDefaultCacheShardBits(capacity);
+  ShardedCacheOptions cache_opts(capacity, num_shard_bits,
+                                 strict_capacity_limit, metadata_charge_policy);
+
+  std::unique_ptr<Cache> cache(new ClockCache(cache_opts));
+  std::shared_ptr<Cache> result;
+  if (cache->SetupCache().ok()) {
+    result.reset(cache.release());
   }
-  return std::make_shared<ClockCache>(
-      capacity, num_shard_bits, strict_capacity_limit, metadata_charge_policy);
+  return result;
 }
 
 }  // namespace rocksdb

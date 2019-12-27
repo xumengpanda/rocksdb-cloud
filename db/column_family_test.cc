@@ -14,7 +14,6 @@
 
 #include "db/db_impl/db_impl.h"
 #include "db/db_test_util.h"
-#include "memtable/hash_skiplist_rep.h"
 #include "options/options_parser.h"
 #include "port/port.h"
 #include "port/stack_trace.h"
@@ -47,6 +46,7 @@ class EnvCounter : public EnvWrapper {
  public:
   explicit EnvCounter(Env* base)
       : EnvWrapper(base), num_new_writable_file_(0) {}
+  const char *Name() const override { return "CounterEnv"; }
   int GetNumberOfNewWritableFileCalls() {
     return num_new_writable_file_;
   }
@@ -67,8 +67,9 @@ class ColumnFamilyTestBase : public testing::Test {
 #ifndef ROCKSDB_LITE
     const char* test_env_uri = getenv("TEST_ENV_URI");
     if (test_env_uri) {
+      ConfigOptions opts(db_options_);
       Env* test_env = nullptr;
-      Status s = Env::LoadEnv(test_env_uri, &test_env, &env_guard_);
+      Status s = Env::CreateFromString(test_env_uri, opts, &test_env, &env_guard_);
       base_env = test_env;
       EXPECT_OK(s);
       EXPECT_NE(Env::Default(), base_env);
@@ -287,7 +288,8 @@ class ColumnFamilyTestBase : public testing::Test {
       // Verify the CF options of the returned CF handle.
       ColumnFamilyDescriptor desc;
       ASSERT_OK(handles_[cfi]->GetDescriptor(&desc));
-      RocksDBOptionsParser::VerifyCFOptions(desc.options, current_cf_opt);
+      RocksDBOptionsParser::VerifyCFOptions(desc.options, current_cf_opt,
+                                            ConfigOptions());
 #endif  // !ROCKSDB_LITE
       cfi++;
     }

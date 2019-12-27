@@ -16,12 +16,24 @@
 #include "rocksdb/status.h"
 
 namespace rocksdb {
+class DynamicLibrary;
+class Env;
 class Logger;
+class ObjectLibrary;
+struct ColumnFamilyOptions;
+struct DBOptions;
+
 // Returns a new T when called with a string. Populates the std::unique_ptr
 // argument if granting ownership to caller.
 template <typename T>
 using FactoryFunc =
     std::function<T*(const std::string&, std::unique_ptr<T>*, std::string*)>;
+// The signature of the function for loading factories
+// into an object library.  This method is expected to register
+// factory functions in the supplied ObjectLibrary.
+// @param library   The library to load factories into.
+// @param arg       Argument to the library loader
+using RegistrarFunc = std::function<void(ObjectLibrary&, const std::string&)>;
 
 class ObjectLibrary {
  public:
@@ -61,7 +73,20 @@ class ObjectLibrary {
     std::regex pattern_;  // The pattern for this entry
     FactoryFunc<T> factory_;
   };  // End class FactoryEntry
+
  public:
+  virtual ~ObjectLibrary() {}
+  virtual const char* Name() const = 0;
+
+  std::string ToString() const;
+  virtual Status Validate(const DBOptions&, const ColumnFamilyOptions&) const {
+    return Status::OK();
+  }
+
+  virtual Status Sanitize(DBOptions& db_opts, ColumnFamilyOptions& cf_opts) {
+    return Validate(db_opts, cf_opts);
+  }
+
   // Finds the entry matching the input name and type
   const Entry* FindEntry(const std::string& type,
                          const std::string& name) const;
@@ -76,15 +101,24 @@ class ObjectLibrary {
     AddEntry(T::Type(), entry);
     return factory;
   }
+
+  void Register(const RegistrarFunc& registrar, const std::string& arg) {
+    registrar(*this, arg);
+  }
+
   // Returns the default ObjectLibrary
   static std::shared_ptr<ObjectLibrary>& Default();
+
+ protected:
+  virtual std::string AsString() const;
+
+  // ** FactoryFunctions for this loader, organized by type
+  std::unordered_map<std::string, std::vector<std::unique_ptr<Entry>>> entries_;
 
  private:
   // Adds the input entry to the list for the given type
   void AddEntry(const std::string& type, std::unique_ptr<Entry>& entry);
 
-  // ** FactoryFunctions for this loader, organized by type
-  std::unordered_map<std::string, std::vector<std::unique_ptr<Entry>>> entries_;
 };
 
 // The ObjectRegistry is used to register objects that can be created by a
@@ -96,9 +130,10 @@ class ObjectRegistry {
 
   ObjectRegistry();
 
-  void AddLibrary(const std::shared_ptr<ObjectLibrary>& library) {
-    libraries_.emplace_back(library);
-  }
+  std::shared_ptr<ObjectLibrary> AddLocalLibrary(const std::string& name);
+  Status AddDynamicLibrary(const std::shared_ptr<DynamicLibrary>& library,
+                           const std::string& method,
+                           const std::string& arg = "");
 
   // Creates a new T using the factory function that was registered with a
   // pattern that matches the provided "target" string according to
@@ -191,6 +226,8 @@ class ObjectRegistry {
 
   // Dump the contents of the registry to the logger
   void Dump(Logger* logger) const;
+  const std::string ToString() const;
+  Status ConfigureFromString(Env* env, const std::string&);
 
  private:
   const ObjectLibrary::Entry* FindEntry(const std::string& type,

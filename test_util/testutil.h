@@ -65,6 +65,7 @@ class ErrorEnv : public EnvWrapper {
                writable_file_error_(false),
                num_writable_file_errors_(0) { }
 
+  const char *Name() const override { return "ErrorEnv"; }
   virtual Status NewWritableFile(const std::string& fname,
                                  std::unique_ptr<WritableFile>* result,
                                  const EnvOptions& soptions) override {
@@ -557,6 +558,7 @@ inline std::string EncodeInt(uint64_t x) {
     };
 
     explicit StringEnv(Env* t) : EnvWrapper(t) {}
+    const char *Name() const override { return "StringEnv"; }
     ~StringEnv() override {}
 
     const std::string& GetContent(const std::string& f) { return files_[f]; }

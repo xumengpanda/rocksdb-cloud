@@ -6,8 +6,10 @@
 #ifndef ROCKSDB_LITE
 
 #include "rocksdb/utilities/ldb_cmd.h"
+
 #include "env/composite_env_wrapper.h"
 #include "port/stack_trace.h"
+#include "rocksdb/configurable.h"
 #include "test_util/sync_point.h"
 #include "test_util/testharness.h"
 
@@ -27,7 +29,7 @@ class LdbCmdTest : public testing::Test {
       return Env::Default();
     }
     Env* env = Env::Default();
-    Env::LoadEnv(test_env_uri, &env, &env_guard_);
+    Env::CreateFromString(test_env_uri, ConfigOptions(), &env, &env_guard_);
     return env;
   }
 

@@ -58,7 +58,8 @@ int db_stress_tool(int argc, char** argv) {
     }
     raw_env = new rocksdb::HdfsEnv(FLAGS_hdfs);
   } else if (!FLAGS_env_uri.empty()) {
-    Status s = Env::LoadEnv(FLAGS_env_uri, &raw_env, &env_guard);
+    ConfigOptions cfg;  //**TODO: Get from DBOptions/env
+    Status s = Env::CreateFromString(FLAGS_env_uri, cfg, &raw_env, &env_guard);
     if (raw_env == nullptr) {
       fprintf(stderr, "No Env registered for URI: %s\n", FLAGS_env_uri.c_str());
       exit(1);

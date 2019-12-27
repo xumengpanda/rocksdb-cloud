@@ -133,7 +133,7 @@ Status SstFileDumper::NewTableReader(
     std::unique_ptr<TableReader>* /*table_reader*/) {
   // We need to turn off pre-fetching of index and filter nodes for
   // BlockBasedTable
-  if (BlockBasedTableFactory::kName == options_.table_factory->Name()) {
+  if (TableFactory::kBlockBasedTableName == options_.table_factory->Name()) {
     return options_.table_factory->NewTableReader(
         TableReaderOptions(ioptions_, moptions_.prefix_extractor.get(),
                            soptions_, internal_comparator_),
@@ -625,8 +625,9 @@ int SSTDumpTool::Run(int argc, char** argv, Options options) {
   // than Env::Default(), then try to load custom env based on dir_or_file.
   // Otherwise, the caller is responsible for creating custom env.
   if (!options.env || options.env == rocksdb::Env::Default()) {
+    ConfigOptions cfg;
     Env* env = Env::Default();
-    Status s = Env::LoadEnv(env_uri ? env_uri : "", &env, &env_guard);
+    Status s = Env::CreateFromString(env_uri ? env_uri : "", cfg, &env, &env_guard);
     if (!s.ok() && !s.IsNotFound()) {
       fprintf(stderr, "LoadEnv: %s\n", s.ToString().c_str());
       exit(1);

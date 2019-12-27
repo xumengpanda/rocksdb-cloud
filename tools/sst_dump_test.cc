@@ -94,7 +94,7 @@ class SSTDumpToolTest : public testing::Test {
   SSTDumpToolTest() : env_(Env::Default()) {
     const char* test_env_uri = getenv("TEST_ENV_URI");
     if (test_env_uri) {
-      Env::LoadEnv(test_env_uri, &env_, &env_guard_);
+      Env::CreateFromString(test_env_uri, ConfigOptions(), &env_, &env_guard_);
     }
     test_dir_ = test::PerThreadDBPath(env_, "sst_dump_test_db");
     Status s = env_->CreateDirIfMissing(test_dir_);

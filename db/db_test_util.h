@@ -25,7 +25,6 @@
 #include "db/dbformat.h"
 #include "env/mock_env.h"
 #include "file/filename.h"
-#include "memtable/hash_linklist_rep.h"
 #include "rocksdb/cache.h"
 #include "rocksdb/compaction_filter.h"
 #include "rocksdb/convenience.h"
@@ -195,7 +194,7 @@ class SpecialSkipListFactory : public MemTableRepFactory {
         allocator, factory_.CreateMemTableRep(compare, allocator, transform, 0),
         num_entries_flush_);
   }
-  virtual const char* Name() const override { return "SkipListFactory"; }
+  virtual const char* Name() const override { return "SpecialSkipListFactory"; }
 
   bool IsInsertConcurrentlySupported() const override {
     return factory_.IsInsertConcurrentlySupported();
@@ -210,6 +209,7 @@ class SpecialSkipListFactory : public MemTableRepFactory {
 class SpecialEnv : public EnvWrapper {
  public:
   explicit SpecialEnv(Env* base);
+  const char *Name() const override { return "SpecialEnv"; }
 
   Status NewWritableFile(const std::string& f, std::unique_ptr<WritableFile>* r,
                          const EnvOptions& soptions) override {

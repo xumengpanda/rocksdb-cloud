@@ -96,6 +96,7 @@ void _always_assert_fail(int line, const char *file, const char *expr) {
 
 using rocksdb::Arena;
 using rocksdb::BlockContents;
+using rocksdb::BloomFilterOptions;
 using rocksdb::BloomFilterPolicy;
 using rocksdb::BloomHash;
 using rocksdb::CachableEntry;
@@ -247,7 +248,7 @@ struct FilterBench : public MockBlockBasedTableTester {
   FilterBench()
       : MockBlockBasedTableTester(new BloomFilterPolicy(
             FLAGS_bits_per_key,
-            static_cast<BloomFilterPolicy::Mode>(FLAGS_impl))),
+            static_cast<BloomFilterOptions::Mode>(FLAGS_impl))),
         random_(FLAGS_seed) {
     for (uint32_t i = 0; i < FLAGS_batch_size; ++i) {
       kms_.emplace_back(FLAGS_key_size < 8 ? 8 : FLAGS_key_size);

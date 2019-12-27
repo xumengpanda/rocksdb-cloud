@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -16,8 +17,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
 #include "port/port.h"
 #include "port/sys_time.h"
+#include "rocksdb/env.h"
 #include "rocksdb/slice.h"
 
 namespace rocksdb {
@@ -263,6 +266,20 @@ std::string trim(const std::string& str) {
   return std::string();
 }
 
+bool EndsWith(const std::string& string, const std::string& pattern) {
+  size_t plen = pattern.size();
+  size_t slen = string.size();
+  if (plen <= slen) {
+    return string.compare(slen - plen, plen, pattern) == 0;
+  } else {
+    return false;
+  }
+}
+
+bool StartsWith(const std::string& string, const std::string& pattern) {
+  return string.compare(0, pattern.size(), pattern) == 0;
+}
+
 #ifndef ROCKSDB_LITE
 
 bool ParseBoolean(const std::string& type, const std::string& value) {
@@ -377,6 +394,23 @@ double ParseDouble(const std::string& value) {
 
 size_t ParseSizeT(const std::string& value) {
   return static_cast<size_t>(ParseUint64(value));
+}
+
+std::vector<std::string> ParseVector(const std::string& value,
+                                     const char delimiter) {
+  std::vector<std::string> result;
+  size_t start = 0;
+  while (start < value.size()) {
+    size_t end = value.find(delimiter, start);
+    if (end == std::string::npos) {
+      result.push_back(value.substr(start));
+      break;
+    } else {
+      result.push_back(value.substr(start, end - start));
+      start = end + 1;
+    }
+  }
+  return result;
 }
 
 std::vector<int> ParseVectorInt(const std::string& value) {

@@ -455,6 +455,12 @@ class MockCache : public LRUCache {
   }
 };
 
+static std::shared_ptr<MockCache> NewMockCache() {
+  std::shared_ptr<MockCache> mock = std::make_shared<MockCache>();
+  mock->SetupCache();
+  return mock;
+}
+
 uint32_t MockCache::high_pri_insert_count = 0;
 uint32_t MockCache::low_pri_insert_count = 0;
 
@@ -467,7 +473,7 @@ TEST_F(DBBlockCacheTest, IndexAndFilterBlocksCachePriority) {
     options.statistics = rocksdb::CreateDBStatistics();
     BlockBasedTableOptions table_options;
     table_options.cache_index_and_filter_blocks = true;
-    table_options.block_cache.reset(new MockCache());
+    table_options.block_cache = NewMockCache();
     table_options.filter_policy.reset(NewBloomFilterPolicy(20));
     table_options.cache_index_and_filter_blocks_with_high_priority =
         priority == Cache::Priority::HIGH ? true : false;
@@ -709,7 +715,7 @@ TEST_F(DBBlockCacheTest, CacheCompressionDict) {
     options.target_file_size_base = kNumEntriesPerFile * kNumBytesPerEntry;
     BlockBasedTableOptions table_options;
     table_options.cache_index_and_filter_blocks = true;
-    table_options.block_cache.reset(new MockCache());
+    table_options.block_cache = NewMockCache();
     options.table_factory.reset(new BlockBasedTableFactory(table_options));
     DestroyAndReopen(options);
 

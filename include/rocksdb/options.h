@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <limits>
 #include <memory>
 #include <string>
@@ -21,9 +22,9 @@
 #include "rocksdb/env.h"
 #include "rocksdb/listener.h"
 #include "rocksdb/pre_release_callback.h"
+#include "rocksdb/types.h"
 #include "rocksdb/universal_compaction.h"
 #include "rocksdb/version.h"
-#include "rocksdb/write_buffer_manager.h"
 
 #ifdef max
 #undef max
@@ -37,19 +38,24 @@ class CompactionFilterFactory;
 class Comparator;
 class ConcurrentTaskLimiter;
 class Env;
+class EventListener;
 enum InfoLogLevel : unsigned char;
 class SstFileManager;
+class FileSystem;
 class FilterPolicy;
 class Logger;
 class MergeOperator;
 class Snapshot;
 class MemTableRepFactory;
+class ObjectRegistry;
 class RateLimiter;
 class Slice;
 class Statistics;
 class InternalKeyComparator;
 class WalFilter;
-class FileSystem;
+class WriteBufferManager;
+struct ConfigOptions;
+struct TableProperties;
 
 // DB contents are stored in a set of blocks, each of which holds a
 // sequence of key,value pairs.  Each block may be compressed before
@@ -316,6 +322,7 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   explicit ColumnFamilyOptions(const Options& options);
 
   void Dump(Logger* log) const;
+  void Dump(Logger* log, const ConfigOptions& opts) const;
 };
 
 enum class WALRecoveryMode : char {
@@ -1115,6 +1122,9 @@ struct DBOptions {
   //
   // Default: 0
   size_t log_readahead_size = 0;
+#ifndef ROCKSDB_LITE
+  std::shared_ptr<ObjectRegistry> object_registry;
+#endif  // ROCKSDB_LITE
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

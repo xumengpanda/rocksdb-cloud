@@ -297,7 +297,7 @@ class CompositeEnvWrapper : public Env {
 
   // Return the target to which this Env forwards all calls
   Env* env_target() const { return env_target_; }
-
+  const char *Name() const override { return env_target_->Name(); }
   FileSystem* fs_env_target() const { return fs_env_target_; }
 
   // The following text is boilerplate that forwards all methods to target()

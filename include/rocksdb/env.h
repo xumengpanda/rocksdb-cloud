@@ -23,6 +23,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "rocksdb/customizable.h"
 #include "rocksdb/status.h"
 #include "rocksdb/thread_status.h"
 
@@ -56,6 +57,7 @@ struct ImmutableDBOptions;
 struct MutableDBOptions;
 class RateLimiter;
 class ThreadStatusUpdater;
+struct ConfigOptions;
 struct ThreadStatus;
 
 const size_t kDefaultPageSize = 4 * 1024;
@@ -130,7 +132,7 @@ struct EnvOptions {
   RateLimiter* rate_limiter = nullptr;
 };
 
-class Env {
+class Env : public Customizable {
  public:
   struct FileAttributes {
     // File name
@@ -150,11 +152,12 @@ class Env {
   static const char* Type() { return "Environment"; }
 
   // Loads the environment specified by the input value into the result
-  static Status LoadEnv(const std::string& value, Env** result);
+  static Status CreateFromString(const std::string& value, const ConfigOptions& opts,
+                                 Env** result);
 
   // Loads the environment specified by the input value into the result
-  static Status LoadEnv(const std::string& value, Env** result,
-                        std::shared_ptr<Env>* guard);
+  static Status CreateFromString(const std::string& value, const ConfigOptions& opts,
+                                 Env** result, std::shared_ptr<Env>* guard);
 
   // Return a default environment suitable for the current operating
   // system.  Sophisticated users may wish to provide their own Env
@@ -163,6 +166,20 @@ class Env {
   // The result of Default() belongs to rocksdb and must never be deleted.
   static Env* Default();
 
+  // Finds the named environment in the environment stack, or nullptr if not found
+  virtual Env* Find(const std::string& name) {
+    if (name == Name()) {
+      return this;
+    } else {
+      return nullptr;
+    }
+  }
+  // Returns the named environment as its base type
+  template<typename T>
+  T* AsEnv(const std::string& name) {
+    return static_cast<T*>(Find(name));
+  }
+  
   // Create a brand new sequentially-readable file with the specified name.
   // On success, stores a pointer to the new file in *result and returns OK.
   // On failure stores nullptr in *result and returns non-OK.  If the file does
@@ -1146,12 +1163,20 @@ extern Status ReadFileToString(Env* env, const std::string& fname,
 class EnvWrapper : public Env {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
-  explicit EnvWrapper(Env* t) : target_(t) {}
+  explicit EnvWrapper(Env* t);
   ~EnvWrapper() override;
 
   // Return the target to which this Env forwards all calls
   Env* target() const { return target_; }
 
+  Env *Find(const std::string& name) override {
+    Env *found = Env::Find(name);
+    if (found == nullptr) {
+      found = target_->Find(name);
+    }
+    return found;
+  }
+  
   // The following text is boilerplate that forwards all methods to target()
   Status NewSequentialFile(const std::string& f,
                            std::unique_ptr<SequentialFile>* r,

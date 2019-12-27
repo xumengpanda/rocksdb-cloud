@@ -20,12 +20,14 @@
 #pragma once
 
 #include <stdlib.h>
+
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "rocksdb/advanced_options.h"
+#include "rocksdb/customizable.h"
 
 namespace rocksdb {
 
@@ -117,7 +119,7 @@ struct FilterBuildingContext {
 // RocksDB would first try using functions in Set 2. if they return nullptr,
 // it would use Set 1 instead.
 // You can choose filter type in NewBloomFilterPolicy
-class FilterPolicy {
+class FilterPolicy : public Customizable {
  public:
   virtual ~FilterPolicy();
 
@@ -125,7 +127,10 @@ class FilterPolicy {
   // changes in an incompatible way, the name returned by this method
   // must be changed.  Otherwise, old incompatible filters may be
   // passed to methods of this type.
-  virtual const char* Name() const = 0;
+  static const char* Type() { return "FilterPolicy"; }
+  static Status CreateFromString(const std::string& id,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<const FilterPolicy>* policy);
 
   // keys[0,n-1] contains a list of keys (potentially with duplicates)
   // that are ordered according to the user supplied comparator.

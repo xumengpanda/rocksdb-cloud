@@ -37,7 +37,8 @@ class ChrootEnv : public EnvWrapper {
     free(real_chroot_dir);
 #endif
   }
-
+  const char *Name() const override { return "ChrootEnv"; }
+  
   Status NewSequentialFile(const std::string& fname,
                            std::unique_ptr<SequentialFile>* result,
                            const EnvOptions& options) override {

@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <functional>
 
+#include "cache/lru_cache.h"
 #include "db/db_test_util.h"
 #include "db/read_callback.h"
 #include "port/port.h"
@@ -2633,11 +2634,11 @@ TEST_F(DBTest2, OptimizeForSmallDB) {
   options.OptimizeForSmallDb();
 
   // Find the cache object
-  ASSERT_EQ(std::string(BlockBasedTableFactory::kName),
+  ASSERT_EQ(std::string(TableFactory::kBlockBasedTableName),
             std::string(options.table_factory->Name()));
-  BlockBasedTableOptions* table_options =
-      reinterpret_cast<BlockBasedTableOptions*>(
-          options.table_factory->GetOptions());
+  auto* table_options =
+      options.table_factory->GetOptions<BlockBasedTableOptions>(
+          TableFactory::kBlockBasedTableOpts);
   ASSERT_TRUE(table_options != nullptr);
   std::shared_ptr<Cache> cache = table_options->block_cache;
 
@@ -3934,6 +3935,7 @@ TEST_F(DBTest2, MultiDBParallelOpenTest) {
 namespace {
 class DummyOldStats : public Statistics {
  public:
+  const char* Name() const override { return "DummyOldStats"; }
   uint64_t getTickerCount(uint32_t /*ticker_type*/) const override { return 0; }
   void recordTick(uint32_t /* ticker_type */, uint64_t /* count */) override {
     num_rt++;

@@ -29,17 +29,7 @@ class BuiltinFilterBitsBuilder : public FilterBitsBuilder {
   virtual uint32_t CalculateSpace(const int num_entry) = 0;
 };
 
-// RocksDB built-in filter policy for Bloom or Bloom-like filters.
-// This class is considered internal API and subject to change.
-// See NewBloomFilterPolicy.
-class BloomFilterPolicy : public FilterPolicy {
- public:
-  // An internal marker for operating modes of BloomFilterPolicy, in terms
-  // of selecting an implementation. This makes it easier for tests to track
-  // or to walk over the built-in set of Bloom filter implementations. The
-  // only variance in BloomFilterPolicy by mode/implementation is in
-  // GetFilterBitsBuilder(), so an enum is practical here vs. subclasses.
-  //
+struct BloomFilterOptions {
   // This enum is essentially the union of all the different kinds of return
   // value from GetFilterBitsBuilder, or "underlying implementation", and
   // higher-level modes that choose an underlying implementation based on
@@ -63,17 +53,36 @@ class BloomFilterPolicy : public FilterPolicy {
     // NOTE: This is currently the only recommended mode that is user exposed.
     kAuto = 100,
   };
+
+  double bits_per_key;
+
+  // Selected mode (a specific implementation or way of selecting an
+  // implementation) for building new SST filters.
+  Mode mode;
+};
+// RocksDB built-in filter policy for Bloom or Bloom-like filters.
+// This class is considered internal API and subject to change.
+// See NewBloomFilterPolicy.
+class BloomFilterPolicy : public FilterPolicy {
+ public:
+  // An internal marker for operating modes of BloomFilterPolicy, in terms
+  // of selecting an implementation. This makes it easier for tests to track
+  // or to walk over the built-in set of Bloom filter implementations. The
+  // only variance in BloomFilterPolicy by mode/implementation is in
+  // GetFilterBitsBuilder(), so an enum is practical here vs. subclasses.
+  //
   // All the different underlying implementations that a BloomFilterPolicy
   // might use, as a mode that says "always use this implementation."
   // Only appropriate for unit tests.
-  static const std::vector<Mode> kAllFixedImpls;
+  static const std::vector<BloomFilterOptions::Mode> kAllFixedImpls;
 
   // All the different modes of BloomFilterPolicy that are exposed from
   // user APIs. Only appropriate for higher-level unit tests. Integration
   // tests should prefer using NewBloomFilterPolicy (user-exposed).
-  static const std::vector<Mode> kAllUserModes;
+  static const std::vector<BloomFilterOptions::Mode> kAllUserModes;
 
-  explicit BloomFilterPolicy(double bits_per_key, Mode mode);
+  explicit BloomFilterPolicy(double bits_per_key,
+                             BloomFilterOptions::Mode mode);
 
   ~BloomFilterPolicy() override;
 
@@ -106,25 +115,12 @@ class BloomFilterPolicy : public FilterPolicy {
   FilterBitsReader* GetFilterBitsReader(const Slice& contents) const override;
 
   // Essentially for testing only: configured millibits/key
-  int GetMillibitsPerKey() const { return millibits_per_key_; }
+  int GetMillibitsPerKey() const;
   // Essentially for testing only: legacy whole bits/key
-  int GetWholeBitsPerKey() const { return whole_bits_per_key_; }
+  int GetWholeBitsPerKey() const;
 
  private:
-  // Newer filters support fractional bits per key. For predictable behavior
-  // of 0.001-precision values across floating point implementations, we
-  // round to thousandths of a bit (on average) per key.
-  int millibits_per_key_;
-
-  // Older filters round to whole number bits per key. (There *should* be no
-  // compatibility issue with fractional bits per key, but preserving old
-  // behavior with format_version < 5 just in case.)
-  int whole_bits_per_key_;
-
-  // Selected mode (a specific implementation or way of selecting an
-  // implementation) for building new SST filters.
-  Mode mode_;
-
+  BloomFilterOptions options_;
   // For newer Bloom filter implementation(s)
   FilterBitsReader* GetBloomBitsReader(const Slice& contents) const;
 };

@@ -4,7 +4,10 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #include "rocksdb/utilities/sim_cache.h"
+
 #include <atomic>
+
+#include "cache/lru_cache.h"
 #include "env/composite_env_wrapper.h"
 #include "file/writable_file_writer.h"
 #include "monitoring/statistics.h"

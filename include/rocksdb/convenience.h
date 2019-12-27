@@ -7,6 +7,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "rocksdb/db.h"
@@ -14,7 +15,7 @@
 #include "rocksdb/table.h"
 
 namespace rocksdb {
-
+struct ConfigOptions;
 #ifndef ROCKSDB_LITE
 // The following set of functions provide a way to construct RocksDB Options
 // from a string or a string-to-string map.  Here're the general rule of
@@ -168,8 +169,10 @@ namespace rocksdb {
 Status GetColumnFamilyOptionsFromMap(
     const ColumnFamilyOptions& base_options,
     const std::unordered_map<std::string, std::string>& opts_map,
-    ColumnFamilyOptions* new_options, bool input_strings_escaped = false,
-    bool ignore_unknown_options = false);
+    const ConfigOptions& cfg_opts, ColumnFamilyOptions* new_options);
+
+Status GetCFOptionNames(std::unordered_set<std::string>* opt_names,
+                        bool use_mutable = false);
 
 // Take a default DBOptions "base_options" in addition to a
 // map "opts_map" of option name to option value to construct the new
@@ -202,73 +205,6 @@ Status GetDBOptionsFromMap(
     DBOptions* new_options, bool input_strings_escaped = false,
     bool ignore_unknown_options = false);
 
-// Take a default BlockBasedTableOptions "table_options" in addition to a
-// map "opts_map" of option name to option value to construct the new
-// BlockBasedTableOptions "new_table_options".
-//
-// Below are the instructions of how to config some non-primitive-typed
-// options in BlockBasedTableOptions:
-//
-// * filter_policy:
-//   We currently only support the following FilterPolicy in the convenience
-//   functions:
-//   - BloomFilter: use "bloomfilter:[bits_per_key]:[use_block_based_builder]"
-//     to specify BloomFilter.  The above string is equivalent to calling
-//     NewBloomFilterPolicy(bits_per_key, use_block_based_builder).
-//     [Example]:
-//     - Pass {"filter_policy", "bloomfilter:4:true"} in
-//       GetBlockBasedTableOptionsFromMap to use a BloomFilter with 4-bits
-//       per key and use_block_based_builder enabled.
-//
-// * block_cache / block_cache_compressed:
-//   We currently only support LRU cache in the GetOptions API.  The LRU
-//   cache can be set by directly specifying its size.
-//   [Example]:
-//   - Passing {"block_cache", "1M"} in GetBlockBasedTableOptionsFromMap is
-//     equivalent to setting block_cache using NewLRUCache(1024 * 1024).
-//
-// @param table_options the default options of the output "new_table_options".
-// @param opts_map an option name to value map for specifying how
-//     "new_table_options" should be set.
-// @param new_table_options the resulting options based on "table_options"
-//     with the change specified in "opts_map".
-// @param input_strings_escaped when set to true, each escaped characters
-//     prefixed by '\' in the values of the opts_map will be further converted
-//     back to the raw string before assigning to the associated options.
-// @param ignore_unknown_options when set to true, unknown options are ignored
-//     instead of resulting in an unknown-option error.
-// @return Status::OK() on success.  Otherwise, a non-ok status indicating
-//     error will be returned, and "new_table_options" will be set to
-//     "table_options".
-Status GetBlockBasedTableOptionsFromMap(
-    const BlockBasedTableOptions& table_options,
-    const std::unordered_map<std::string, std::string>& opts_map,
-    BlockBasedTableOptions* new_table_options,
-    bool input_strings_escaped = false, bool ignore_unknown_options = false);
-
-// Take a default PlainTableOptions "table_options" in addition to a
-// map "opts_map" of option name to option value to construct the new
-// PlainTableOptions "new_table_options".
-//
-// @param table_options the default options of the output "new_table_options".
-// @param opts_map an option name to value map for specifying how
-//     "new_table_options" should be set.
-// @param new_table_options the resulting options based on "table_options"
-//     with the change specified in "opts_map".
-// @param input_strings_escaped when set to true, each escaped characters
-//     prefixed by '\' in the values of the opts_map will be further converted
-//     back to the raw string before assigning to the associated options.
-// @param ignore_unknown_options when set to true, unknown options are ignored
-//     instead of resulting in an unknown-option error.
-// @return Status::OK() on success.  Otherwise, a non-ok status indicating
-//     error will be returned, and "new_table_options" will be set to
-//     "table_options".
-Status GetPlainTableOptionsFromMap(
-    const PlainTableOptions& table_options,
-    const std::unordered_map<std::string, std::string>& opts_map,
-    PlainTableOptions* new_table_options, bool input_strings_escaped = false,
-    bool ignore_unknown_options = false);
-
 // Take a string representation of option names and  values, apply them into the
 // base_options, and return the new options as a result. The string has the
 // following format:
@@ -277,18 +213,27 @@ Status GetPlainTableOptionsFromMap(
 // BlockBasedTableOptions as part of the string for block-based table factory:
 //   "write_buffer_size=1024;block_based_table_factory={block_size=4k};"
 //   "max_write_buffer_num=2"
+
 Status GetColumnFamilyOptionsFromString(const ColumnFamilyOptions& base_options,
                                         const std::string& opts_str,
+                                        const ConfigOptions& cfg_options,
                                         ColumnFamilyOptions* new_options);
 
 Status GetDBOptionsFromString(const DBOptions& base_options,
                               const std::string& opts_str,
                               DBOptions* new_options);
-
+Status GetStringFromDBOptions(const DBOptions& db_options,
+                              const ConfigOptions& options,
+                              std::string* opts_str);
+// Deprecated: Maintained for backward compatibility
 Status GetStringFromDBOptions(std::string* opts_str,
                               const DBOptions& db_options,
                               const std::string& delimiter = ";  ");
 
+Status GetStringFromColumnFamilyOptions(const ColumnFamilyOptions& cf_options,
+                                        const ConfigOptions& options,
+                                        std::string* opts_str);
+// Deprecated: Maintained for backward compatibility
 Status GetStringFromColumnFamilyOptions(std::string* opts_str,
                                         const ColumnFamilyOptions& cf_options,
                                         const std::string& delimiter = ";  ");
@@ -297,14 +242,6 @@ Status GetStringFromCompressionType(std::string* compression_str,
                                     CompressionType compression_type);
 
 std::vector<CompressionType> GetSupportedCompressions();
-
-Status GetBlockBasedTableOptionsFromString(
-    const BlockBasedTableOptions& table_options, const std::string& opts_str,
-    BlockBasedTableOptions* new_table_options);
-
-Status GetPlainTableOptionsFromString(const PlainTableOptions& table_options,
-                                      const std::string& opts_str,
-                                      PlainTableOptions* new_table_options);
 
 Status GetMemTableRepFactoryFromString(
     const std::string& opts_str,

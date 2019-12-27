@@ -45,6 +45,7 @@ class StatisticsImpl : public Statistics {
   StatisticsImpl(std::shared_ptr<Statistics> stats);
   virtual ~StatisticsImpl();
 
+  const char* Name() const override { return "BasicStatistics"; }
   virtual uint64_t getTickerCount(uint32_t ticker_type) const override;
   virtual void histogramData(uint32_t histogram_type,
                              HistogramData* const data) const override;

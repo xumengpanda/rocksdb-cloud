@@ -3,9 +3,11 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 //
-#include "env/composite_env_wrapper.h"
 #include "rocksdb/file_system.h"
+
+#include "env/composite_env_wrapper.h"
 #include "options/db_options.h"
+#include "rocksdb/configurable.h"
 #include "rocksdb/utilities/object_registry.h"
 
 namespace rocksdb {
@@ -14,12 +16,13 @@ FileSystem::FileSystem() {}
 
 FileSystem::~FileSystem() {}
 
-Status FileSystem::Load(const std::string& value,
+Status FileSystem::Load(const std::string& value, const ConfigOptions& opts,
                         std::shared_ptr<FileSystem>* result) {
   Status s;
 #ifndef ROCKSDB_LITE
-  s = ObjectRegistry::NewInstance()->NewSharedObject<FileSystem>(value, result);
+  opts.registry->NewSharedObject<FileSystem>(value, result);
 #else
+  (void)opts;
   (void)result;
   s = Status::NotSupported("Cannot load FileSystem in LITE mode: ", value);
 #endif

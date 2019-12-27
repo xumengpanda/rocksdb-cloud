@@ -109,6 +109,12 @@ std::string UnescapeOptionString(const std::string& escaped_string);
 
 std::string trim(const std::string& str);
 
+// Returns true if "string" ends with "pattern"
+bool EndsWith(const std::string& string, const std::string& pattern);
+
+// Returns true if "string" starts with "pattern"
+bool StartsWith(const std::string& string, const std::string& pattern);
+
 #ifndef ROCKSDB_LITE
 bool ParseBoolean(const std::string& type, const std::string& value);
 
@@ -128,6 +134,8 @@ double ParseDouble(const std::string& value);
 size_t ParseSizeT(const std::string& value);
 
 std::vector<int> ParseVectorInt(const std::string& value);
+
+std::vector<std::string> ParseVector(const std::string& value, char delim);
 
 bool SerializeIntVector(const std::vector<int>& vec, std::string* value);
 
