@@ -336,7 +336,7 @@ public:
   Env* GetBaseEnv() {
     return base_env_;
   }
-  virtual const char *Name() const { return "CloudEnv"; }
+  virtual const char *Name() const { return kCloudEnvName.c_str(); }
   const std::shared_ptr<Logger> & GetLogger() const {
     return info_log_;
   }

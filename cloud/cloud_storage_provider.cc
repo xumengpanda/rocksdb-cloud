@@ -9,6 +9,7 @@
 
 #include "cloud/cloud_env_impl.h"
 #include "cloud/filename.h"
+#include "cloud/cloud_storage_provider_impl.h"
 #include "file/filename.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/env.h"
@@ -249,16 +250,9 @@ Status CloudStorageWritableFile::Sync() {
 
 CloudStorageProvider::~CloudStorageProvider() {}
 
-Status CloudStorageProvider::Initialize(CloudEnv* env) {
-  env_ = env;
-  return Status::OK();
-}
-  
 Status CloudStorageProvider::Prepare(CloudEnv *env) {
-  status_ = Initialize(env);
-  if (!status_.ok()) {
-    return status_;
-  } else if (env->HasDestBucket()) {
+  Status status;
+  if (env->HasDestBucket()) {
     // create dest bucket if specified
     if (ExistsBucket(env->GetDestBucketName()).ok()) {
       Log(InfoLogLevel::INFO_LEVEL, env->GetLogger(),
@@ -268,25 +262,22 @@ Status CloudStorageProvider::Prepare(CloudEnv *env) {
       Log(InfoLogLevel::INFO_LEVEL, env->GetLogger(),
           "[%s] Going to create bucket %s", Name(),
           env->GetDestBucketName().c_str());
-      status_ = CreateBucket(env->GetDestBucketName());
+      status = CreateBucket(env->GetDestBucketName());
     } else {
-      status_ = Status::NotFound(
+      status = Status::NotFound(
           "Bucket not found and create_bucket_if_missing is false");
     }
-    if (!status_.ok()) {
+    if (!status.ok()) {
       Log(InfoLogLevel::ERROR_LEVEL, env->GetLogger(),
           "[%s] Unable to create bucket %s %s", Name(),
-          env->GetDestBucketName().c_str(), status_.ToString().c_str());
-      return status_;
+          env->GetDestBucketName().c_str(), status.ToString().c_str());
+      return status;
     }
   }
-  if (status_.ok()) {
-    env_ = env;
-  }
-  return status_;
+  return status;
 }
 
-Status CloudStorageProvider::Verify() const {
+Status CloudStorageProviderImpl::Verify() const {
   if (!status_.ok()) {
     return status_;
   } else if (!env_) {
@@ -295,8 +286,24 @@ Status CloudStorageProvider::Verify() const {
     return Status::OK();
   }
 }
+  
+Status CloudStorageProviderImpl::Prepare(CloudEnv *env) {
+  status_ = Initialize(env);
+  if (status_.ok()) {
+    status_ = CloudStorageProvider::Prepare(env);
+  }
+  if (status_.ok()) {
+    env_ = env;
+  }
+  return status_;
+}
 
-Status CloudStorageProvider::NewCloudReadableFile(
+Status CloudStorageProviderImpl::Initialize(CloudEnv* env) {
+  env_ = env;
+  return Status::OK();
+}
+  
+Status CloudStorageProviderImpl::NewCloudReadableFile(
     const std::string& bucket, const std::string& fname,
     std::unique_ptr<CloudStorageReadableFile>* result) {
   // First, check if the file exists and also find its size. We use size in
@@ -309,7 +316,7 @@ Status CloudStorageProvider::NewCloudReadableFile(
   return DoNewCloudReadableFile(bucket, fname, size, result);
 }
 
-Status CloudStorageProvider::GetObject(const std::string& bucket_name,
+Status CloudStorageProviderImpl::GetObject(const std::string& bucket_name,
                                        const std::string& object_path,
                                        const std::string& local_destination) {
   Env* localenv = env_->GetBaseEnv();
@@ -347,7 +354,7 @@ Status CloudStorageProvider::GetObject(const std::string& bucket_name,
   return s;
 }
 
-Status CloudStorageProvider::PutObject(const std::string& local_file,
+Status CloudStorageProviderImpl::PutObject(const std::string& local_file,
                                        const std::string& bucket_name,
                                        const std::string& object_path) {
   uint64_t fsize = 0;

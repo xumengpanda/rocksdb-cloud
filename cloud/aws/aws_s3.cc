@@ -41,6 +41,7 @@
 
 #include "cloud/aws/aws_env.h"
 #include "cloud/aws/aws_file.h"
+#include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
@@ -339,7 +340,7 @@ class S3WritableFile : public CloudStorageWritableFile {
 
 
 /******************** S3StorageProvider ******************/
-class S3StorageProvider : public CloudStorageProvider {
+class S3StorageProvider : public CloudStorageProviderImpl {
  public:
   ~S3StorageProvider() override {}
   virtual const char* Name() const override { return "s3"; }
@@ -407,7 +408,7 @@ class S3StorageProvider : public CloudStorageProvider {
 };
 
 Status S3StorageProvider::Initialize(CloudEnv* env) {
-  Status status = CloudStorageProvider::Initialize(env);
+  Status status = CloudStorageProviderImpl::Initialize(env);
   if (! status.ok()) {
     return status;
   }
@@ -447,7 +448,7 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
 }
 
 Status S3StorageProvider::Verify() const {
-  Status s = CloudStorageProvider::Verify();
+  Status s = CloudStorageProviderImpl::Verify();
   if (s.ok()) {
     if (! s3client_) {
       s = Status::InvalidArgument("S3Client Failed to initialize");

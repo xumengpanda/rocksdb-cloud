@@ -17,6 +17,9 @@
 
 namespace rocksdb {
 
+const std::string CloudEnv::kCloudEnvOpts ="CloudEnvOptions";
+const std::string CloudEnv::kCloudEnvName = "CloudEnv";
+
 bool CloudEnvOptions::GetNameFromEnvironment(const char *name, const char *alt, std::string * result) {
 
   char *value = getenv(name);               // See if name is set in the environment

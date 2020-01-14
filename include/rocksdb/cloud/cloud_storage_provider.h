@@ -164,11 +164,11 @@ class CloudStorageProvider  {
   // Downloads object from the cloud into a local directory
   virtual Status GetObject(const std::string& bucket_name,
                            const std::string& object_path,
-                           const std::string& local_path);
+                           const std::string& local_path) = 0;
   // Uploads object to the cloud
   virtual Status PutObject(const std::string& local_path,
                            const std::string& bucket_name,
-                           const std::string& object_path);
+                           const std::string& object_path) = 0;
   // Updates/Sets the metadata of the object in cloud storage
   virtual Status PutObjectMetadata(
       const std::string& bucket_name, const std::string& object_path,
@@ -181,31 +181,8 @@ class CloudStorageProvider  {
 
   virtual Status NewCloudReadableFile(
       const std::string& bucket, const std::string& fname,
-      std::unique_ptr<CloudStorageReadableFile>* result);
-  virtual Status status() { return status_; }
-
-  virtual Status Prepare(CloudEnv *env);
-  virtual Status Verify() const;
- protected:
-  virtual Status Initialize(CloudEnv* env);
-  
-
-  virtual Status DoNewCloudReadableFile(
-      const std::string& bucket, const std::string& fname, uint64_t fsize,
       std::unique_ptr<CloudStorageReadableFile>* result) = 0;
-  // Downloads object from the cloud into a local directory
-  virtual Status DoGetObject(const std::string& bucket_name,
-                             const std::string& object_path,
-                             const std::string& local_path,
-                             uint64_t* remote_size) = 0;
-  virtual Status DoPutObject(const std::string& local_file,
-                             const std::string& object_path,
-                             const std::string& bucket_name,
-                             uint64_t file_size) = 0;
-
-  CloudEnv* env_;
-  Status status_;
-
- private:
+  virtual Status Prepare(CloudEnv *env);
+  virtual Status Verify() const = 0;
 };
 }  // namespace rocksdb
