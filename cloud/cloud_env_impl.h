@@ -44,12 +44,13 @@ class CloudEnvImpl : public CloudEnv {
   virtual Status PreloadCloudManifest(const std::string& local_dbname) override;
 
   Status LoadLocalCloudManifest(const std::string& dbname);
+
   // Transfers the filename from RocksDB's domain to the physical domain, based
   // on information stored in CLOUDMANIFEST.
   // For example, it will map 00010.sst to 00010.sst-[epoch] where [epoch] is
   // an epoch during which that file was created.
   // Files both in S3 and in the local directory have this [epoch] suffix.
-  std::string RemapFilename(const std::string& logical_path) const;
+  std::string RemapFilename(const std::string& logical_path) const override;
 
   // This will delete all files in dest bucket and locally whose epochs are
   // invalid. For example, if we find 00010.sst-[epochX], but the real mapping

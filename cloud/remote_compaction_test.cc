@@ -9,29 +9,29 @@
 #endif
 
 #include <inttypes.h>
-#include "rocksdb/cloud/db_cloud.h"
+
 #include <algorithm>
 #include <chrono>
-#include <inttypes.h>
+
 #include "cloud/aws/aws_env.h"
 #include "cloud/aws/aws_file.h"
 #include "cloud/db_cloud_impl.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
-#include "rocksdb/options.h"
-#include "rocksdb/status.h"
-#include "rocksdb/table.h"
 #include "db/db_impl/db_impl.h"
 #include "file/filename.h"
 #include "logging/logging.h"
-#include "util/string_util.h"
+#include "rocksdb/cloud/db_cloud.h"
+#include "rocksdb/options.h"
+#include "rocksdb/status.h"
+#include "rocksdb/table.h"
 #include "test_util/testharness.h"
+#include "util/string_util.h"
 #ifndef OS_WIN
 #include <unistd.h>
 #endif
 
 namespace rocksdb {
-
 
 class RemoteCompactionTest : public testing::Test {
  public:
@@ -146,7 +146,6 @@ class RemoteCompactionTest : public testing::Test {
                const std::string& dest_object_path,
                std::unique_ptr<DBCloud>* cloud_db,
                std::unique_ptr<CloudEnv>* cloud_env) {
-
     CloudEnv* cenv;
     DBCloud* clone_db;
 
@@ -159,7 +158,7 @@ class RemoteCompactionTest : public testing::Test {
       copt.dest_bucket.SetBucketName(dest_bucket_name);
     }
     copt.dest_bucket.SetObjectPath(dest_object_path);
-    if (! copt.dest_bucket.IsValid()) {
+    if (!copt.dest_bucket.IsValid()) {
       copt.keep_local_sst_files = true;
     }
     // Create new AWS env
@@ -201,39 +200,51 @@ class RemoteCompactionTest : public testing::Test {
   }
 
   Status GetCloudLiveFilesSrc(std::set<uint64_t>* list) {
-    std::unique_ptr<ManifestReader>
-      manifest(new ManifestReader(options_.info_log, aenv_.get(), aenv_->GetSrcBucketName()));
+    std::unique_ptr<ManifestReader> manifest(new ManifestReader(
+        options_.info_log, aenv_.get(), aenv_->GetSrcBucketName()));
     return manifest->GetLiveFiles(aenv_->GetSrcObjectPath(), list);
   }
 
   // Returns the DBImpl of the underlying rocksdb instance
   DBImpl* GetDBImpl() {
     DB* rocksdb = db_->GetBaseDB();
-    return dynamic_cast<DBImpl *>(rocksdb);
+    return dynamic_cast<DBImpl*>(rocksdb);
   }
 
   /**
    * define a pluggable compaction service. It accepts compaction requests from
-   * the DB and then invoke's the DB's ExecuteRemoteCompactionReques to execute it.
+   * the DB and then invoke's the DB's ExecuteRemoteCompactionReques to execute
+   * it.
    */
-  class TestPluggableCompactionService : public PluggableCompactionService  {
+  class TestPluggableCompactionService : public PluggableCompactionService {
    public:
     TestPluggableCompactionService(CloudEnv* _cloud_env, DB* _clone) {
       clone = _clone;
-      cloud_env = (CloudEnvImpl *)_cloud_env;
+      cloud_env = (CloudEnvImpl*)_cloud_env;
     }
-    ~TestPluggableCompactionService() {
-    }
+    ~TestPluggableCompactionService() {}
 
     // Run the remote compaction on a clone database
-    Status Run(const PluggableCompactionParam& job, PluggableCompactionResult* result) {
+    Status Run(const PluggableCompactionParam& job,
+               PluggableCompactionResult* result) {
+      std::cerr << "output level: " << job.output_level << std::endl;
+      std::cerr << "input files:" << std::endl;
+      for (const auto& inputFile : job.input_files) {
+        std::cerr << "level: " << inputFile.level << std::endl;
+        std::cerr << "file: " << std::endl;
+        for (const auto& file : inputFile.files) {
+          std::cerr << file << std::endl;
+        }
+      }
+
       bool doSanitize = false;
-      Status status =  clone->ExecuteRemoteCompactionRequest(job, result, doSanitize);
+      Status status =
+          clone->ExecuteRemoteCompactionRequest(job, result, doSanitize);
 
       // convert the local path name of output sst files to their cloud paths
       if (status.ok()) {
-	for (unsigned int i = 0; i < result->output_files.size(); i++) {
-	  OutputFile* outfile = &result->output_files[i];
+        for (unsigned int i = 0; i < result->output_files.size(); i++) {
+          OutputFile* outfile = &result->output_files[i];
           outfile->pathname = cloud_env->RemapFilename(outfile->pathname);
         }
       }
@@ -242,24 +253,22 @@ class RemoteCompactionTest : public testing::Test {
 
     // Install the remote file into the local db
     Status InstallFile(const std::string& remote_path,
-      const std::string& destination_path,
-      const EnvOptions& env_options,
-      Env* local_env) {
-      
+                       const std::string& destination_path,
+                       const EnvOptions& env_options, Env* local_env) {
       // create destination file
       std::unique_ptr<WritableFile> writable_file;
       Status status = local_env->NewWritableFile(destination_path,
-		       &writable_file, env_options);
+                                                 &writable_file, env_options);
       if (!status.ok()) {
-	return status;
+        return status;
       }
 
       // open source file
       std::unique_ptr<SequentialFile> readable_file;
-      status = local_env->NewSequentialFile(remote_path,
-	       &readable_file, env_options);
+      status = local_env->NewSequentialFile(remote_path, &readable_file,
+                                            env_options);
       if (!status.ok()) {
-	return status;
+        return status;
       }
 
       // copy contents of source file  to destination file
@@ -268,14 +277,14 @@ class RemoteCompactionTest : public testing::Test {
       while (true) {
         status = readable_file->Read(sizeof(scratch), &result, &scratch[0]);
         if (!status.ok()) {
-	  return status;
+          return status;
         }
-	if (result.size() == 0)  {
-	  break;
+        if (result.size() == 0) {
+          break;
         }
-	status = writable_file->Append(result);
+        status = writable_file->Append(result);
         if (!status.ok()) {
-	  return status;
+          return status;
         }
       }
       writable_file->Fsync();
@@ -344,7 +353,7 @@ TEST_F(RemoteCompactionTest, BasicTest) {
 
   {
     // local directory for a clone
-    std::string clone_local_dir =  GetCloneLocalDir("localpath1");
+    std::string clone_local_dir = GetCloneLocalDir("localpath1");
 
     // Create a new instance with different src and destination paths.
     // This is true clone and should have all the contents of the masterdb
@@ -362,7 +371,8 @@ TEST_F(RemoteCompactionTest, BasicTest) {
     ASSERT_OK(SetupPluggableCompaction(cloud_env.get(), cloud_db->GetBaseDB()));
 
     // compact main db and do not allow trivial file moves
-    ASSERT_OK(GetDBImpl()->TEST_CompactRange(0, nullptr, nullptr, nullptr, true));
+    ASSERT_OK(
+        GetDBImpl()->TEST_CompactRange(0, nullptr, nullptr, nullptr, true));
 
     // check that compact made it all into one file
     files.clear();

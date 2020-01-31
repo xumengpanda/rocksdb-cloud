@@ -4,11 +4,10 @@
 //  (found in the LICENSE.Apache file in the root directory).
 //
 
-#include "db/db_impl/db_impl.h"
-
 #include <cinttypes>
 
 #include "db/builder.h"
+#include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "db/event_helpers.h"
 #include "file/sst_file_manager_impl.h"
@@ -26,17 +25,15 @@ namespace rocksdb {
 // This does the meat of the compaction. This function runs on the
 // compaction tier and the logic closely follows DBImpl::CompactFilesImpl
 //
-Status DBImpl::doCompact(
-    const CompactionOptions& compact_options,
-    ColumnFamilyData* cfd,
-    Version* version,
-    const std::vector<FilesInOneLevel>& input_file_names,
-    int output_level,
-    const std::vector<SequenceNumber>& existing_snapshots,
-    bool sanitize __attribute__((unused)),
-    JobContext* job_context,
-    LogBuffer* log_buffer,
-    PluggableCompactionResult* result) {
+Status DBImpl::doCompact(const CompactionOptions& compact_options,
+                         ColumnFamilyData* cfd, Version* version,
+                         const std::vector<FilesInOneLevel>& input_file_names,
+                         int output_level,
+                         const std::vector<SequenceNumber>& existing_snapshots,
+                         bool sanitize __attribute__((unused)),
+                         JobContext* job_context, LogBuffer* log_buffer,
+                         PluggableCompactionResult* result) {
+  ROCKS_LOG_INFO(immutable_db_options_.info_log, "DO COMPACT");
 
   mutex_.AssertHeld();
 
@@ -44,19 +41,26 @@ Status DBImpl::doCompact(
   // because we will find the levels by inspecting the DB version.
   std::unordered_set<uint64_t> input_set;
   for (const auto& onelevel : input_file_names) {
-    for (auto file_name: onelevel.files) {
+    for (auto file_name : onelevel.files) {
       input_set.insert(TableFileNameToNumber(file_name));
     }
   }
+
+  ROCKS_LOG_INFO(immutable_db_options_.info_log, "Done getting input set");
 
   // get column family info
   ColumnFamilyMetaData cf_meta;
   version->GetColumnFamilyMetaData(&cf_meta);
 
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done GetColumnFamilyMetaData");
+
   // For unit tests, the PluggableService redirects to the compaction
   // to the same test database.
   Status s = cfd->compaction_picker()->SanitizeCompactionInputFiles(
-                  &input_set, cf_meta, output_level);
+      &input_set, cf_meta, output_level);
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done SanitizeCompactionInputFiles");
   if (!s.ok()) {
     return s;
   }
@@ -66,7 +70,9 @@ Status DBImpl::doCompact(
   // because the DB should auto find the level of the specified file#.
   std::vector<CompactionInputFiles> input_files;
   s = cfd->compaction_picker()->GetCompactionInputsFromFileNumbers(
-        &input_files, &input_set, version->storage_info(), compact_options);
+      &input_files, &input_set, version->storage_info(), compact_options);
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done GetCompactionInputsFromFileNumbers");
   if (!s.ok()) {
     return s;
   }
@@ -74,10 +80,13 @@ Status DBImpl::doCompact(
   for (const auto& inputs : input_files) {
     if (cfd->compaction_picker()->AreFilesInCompaction(inputs.files)) {
       return Status::Aborted(
-        "Some of the necessary compaction input "
-        "files are already being compacted");
+          "Some of the necessary compaction input "
+          "files are already being compacted");
     }
   }
+
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done AreFilesInCompaction");
 
   // these are dummies and should not be needed
   const int output_path_id = 0;
@@ -91,12 +100,15 @@ Status DBImpl::doCompact(
   c.reset(cfd->compaction_picker()->CompactFiles(
       compact_options, input_files, output_level, version->storage_info(),
       *cfd->GetLatestMutableCFOptions(), output_path_id));
+
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done CompactFiles");
   assert(c != nullptr);
   c->SetInputVersion(version);
 
   // do we need to remember the iterator of our insert?
   auto pending_outputs_inserted_elem =
-    CaptureCurrentFileNumberInPendingOutputs();
+      CaptureCurrentFileNumberInPendingOutputs();
   CompactionJobStats compaction_job_stats;
 
   auto snapshot_checker = snapshot_checker_.get();
@@ -109,27 +121,32 @@ Status DBImpl::doCompact(
   SequenceNumber earliest_write_conflict_snapshot;
   std::vector<SequenceNumber> snapshot_seqs =
       snapshots_.GetAll(&earliest_write_conflict_snapshot);
-  assert (earliest_write_conflict_snapshot == kMaxSequenceNumber);
+  assert(earliest_write_conflict_snapshot == kMaxSequenceNumber);
   assert(snapshot_seqs.size() == 0);
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done snapshot.GetAll");
 
   // create compaction job
   CompactionJob compaction_job(
-    job_context->job_id, c.get(), immutable_db_options_,
-    env_options_for_compaction_, versions_.get(), &shutting_down_,
-    preserve_deletes_seqnum_.load(), log_buffer, directories_.GetDbDir(),
-    GetDataDir(c->column_family_data(), c->output_path_id()), stats_, &mutex_,
-    &error_handler_, existing_snapshots, earliest_write_conflict_snapshot,
-    snapshot_checker, table_cache_, &event_logger_,
-    c->mutable_cf_options()->paranoid_file_checks,
-    c->mutable_cf_options()->report_bg_io_stats, dbname_,
-    &compaction_job_stats, Env::Priority::USER,
-    nullptr);
+      job_context->job_id, c.get(), immutable_db_options_,
+      env_options_for_compaction_, versions_.get(), &shutting_down_,
+      preserve_deletes_seqnum_.load(), log_buffer, directories_.GetDbDir(),
+      GetDataDir(c->column_family_data(), c->output_path_id()), stats_, &mutex_,
+      &error_handler_, existing_snapshots, earliest_write_conflict_snapshot,
+      snapshot_checker, table_cache_, &event_logger_,
+      c->mutable_cf_options()->paranoid_file_checks,
+      c->mutable_cf_options()->report_bg_io_stats, dbname_,
+      &compaction_job_stats, Env::Priority::USER, nullptr);
 
   compaction_job.Prepare();
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done Prepare");
   mutex_.Unlock();
 
   // run the compaction job here
   Status status = compaction_job.Run();
+  ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                 "Done compaction_job.RUN()");
 
   mutex_.Lock();
 
@@ -141,7 +158,7 @@ Status DBImpl::doCompact(
 
   // Make sure SstFileManager does its bookkeeping
   auto sfm = static_cast<SstFileManagerImpl*>(
-          immutable_db_options_.sst_file_manager.get());
+      immutable_db_options_.sst_file_manager.get());
   if (sfm) {
     sfm->OnCompactionCompletion(c.get());
   }
@@ -150,7 +167,7 @@ Status DBImpl::doCompact(
   ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
 
   if (status.ok()) {
-            // Done
+    // Done
   } else if (status.IsShutdownInProgress()) {
     // Ignore compaction errors found during shutting down
   } else {
@@ -173,10 +190,8 @@ Status DBImpl::doCompact(
 // Entry point to execute a remote compaction request on local db.
 //
 Status DBImpl::ExecuteRemoteCompactionRequest(
-    const PluggableCompactionParam& input,
-    PluggableCompactionResult* result,
+    const PluggableCompactionParam& input, PluggableCompactionResult* result,
     bool sanitize) {
-
   Status s;
   JobContext job_context(0, true);
   LogBuffer log_buffer(InfoLogLevel::INFO_LEVEL,
@@ -195,17 +210,14 @@ Status DBImpl::ExecuteRemoteCompactionRequest(
     auto* current = cfd->current();
     current->Ref();
 
-    s = doCompact(input.compact_options, cfd, current,
-                  input.input_files, input.output_level,
-                  input.existing_snapshots,
-		  sanitize,
-                  &job_context, &log_buffer,
-                  result);
+    s = doCompact(input.compact_options, cfd, current, input.input_files,
+                  input.output_level, input.existing_snapshots, sanitize,
+                  &job_context, &log_buffer, result);
 
     current->Unref();
   }
 
-  // Find and delete obsolete files. I think we should not have to 
+  // Find and delete obsolete files. I think we should not have to
   // purge and delete obselete files here.. rethink!
   {
     InstrumentedMutexLock l(&mutex_);
