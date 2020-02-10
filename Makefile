@@ -56,7 +56,7 @@ ifeq ($(MAKECMDGOALS),release)
 endif
 
 ifeq ($(MAKECMDGOALS),shared_lib)
-	DEBUG_LEVEL=0
+	DEBUG_LEVEL=1
 endif
 
 ifeq ($(MAKECMDGOALS),install-shared)
@@ -660,7 +660,7 @@ ifeq ($(LIBNAME),)
 ifeq ($(DEBUG_LEVEL),0)
         LIBNAME=librocksdb
 else
-        LIBNAME=librocksdb_debug
+        LIBNAME=librocksdb
 endif
 endif
 LIBRARY = ${LIBNAME}.a
