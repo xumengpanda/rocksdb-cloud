@@ -430,10 +430,10 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
   Aws::Client::ClientConfiguration config;
   status = AwsCloudOptions::GetClientConfiguration(env, cloud_opts.src_bucket.GetRegion(),
                                                    &config);
-  if (status_.ok()) {
+  if (status.ok()) {
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> creds;
-    status_ = cloud_opts.credentials.GetCredentialsProvider(&creds);
-    if (!status_.ok()) {
+    status = cloud_opts.credentials.GetCredentialsProvider(&creds);
+    if (!status.ok()) {
       Log(InfoLogLevel::INFO_LEVEL, env->GetLogger(),
           "[aws] NewAwsEnv - Bad AWS credentials");
     } else {

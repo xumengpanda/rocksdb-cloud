@@ -460,6 +460,7 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       row_cache(options.row_cache),
 #ifndef ROCKSDB_LITE
       wal_filter(options.wal_filter),
+      object_registry(options.object_registry),
 #endif  // ROCKSDB_LITE
       fail_if_options_file_error(options.fail_if_options_file_error),
       dump_malloc_stats(options.dump_malloc_stats),

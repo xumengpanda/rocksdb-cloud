@@ -28,7 +28,6 @@ class CloudEnvImpl : public CloudEnv {
   CloudEnvImpl(const CloudEnvOptions & options, Env* base_env, const std::shared_ptr<Logger> & logger);
 
   virtual ~CloudEnvImpl();
-  virtual const char *Name() const override;
   Env* Find(const std::string& name) override;
 
   Status SanitizeDirectory(const DBOptions& options,

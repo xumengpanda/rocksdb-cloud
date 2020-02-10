@@ -73,6 +73,7 @@ struct ImmutableDBOptions {
   std::shared_ptr<Cache> row_cache;
 #ifndef ROCKSDB_LITE
   WalFilter* wal_filter;
+  std::shared_ptr<ObjectRegistry> object_registry;
 #endif  // ROCKSDB_LITE
   bool fail_if_options_file_error;
   bool dump_malloc_stats;

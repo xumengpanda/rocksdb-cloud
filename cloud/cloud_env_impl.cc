@@ -141,10 +141,6 @@ CloudEnvImpl::~CloudEnvImpl() {
   StopPurger();
 }
 
-const char *CloudEnvImpl::Name() const {
-  return kCloudEnvImplName.c_str();
-}
-  
 Env* CloudEnvImpl::Find(const std::string& name) {
   if (name == kCloudEnvImplName) {
     return this;

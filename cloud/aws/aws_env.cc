@@ -160,17 +160,31 @@ Status AwsCloudAccessCredentials::GetCredentialsProvider(
 
 extern "C" {
 void RegisterAwsObjects(rocksdb::ObjectLibrary& library,
-                        const std::string& /*arg*/) {
+                        const std::string& arg) {
 #ifdef USE_AWS
-  library.Register<rocksdb::Env>(
-      "AWS",
-      [](const std::string& /*uri*/, std::unique_ptr<rocksdb::Env>* /*guard*/,
-         std::string* /*errmsg*/) {
-        AwsEnv *env = new rocksdb::AwsEnv(rocksdb::Env::Default(), rocksdb::CloudEnvOptions(), nullptr);
-        env->TEST_DisableCloudManifest(); //**MJR: TODO
-        printf("MJR: Loading AWS Environment\n");
-        return env;
-      });
+  printf("MJR: Registering AWS Objects[%s]\n", arg.c_str());
+  if (arg == "shared") {
+    library.Register<rocksdb::Env>(
+        "AWS",
+        [](const std::string& /*uri*/, std::unique_ptr<rocksdb::Env>* guard,
+           std::string* /*errmsg*/) {
+          AwsEnv *env = new rocksdb::AwsEnv(rocksdb::Env::Default(), rocksdb::CloudEnvOptions(), nullptr);
+          guard->reset(env);
+          env->TEST_DisableCloudManifest(); //**MJR: TODO
+          printf("MJR: Loading Shared AWS Environment\n");
+          return env;
+        });
+  } else {
+    library.Register<rocksdb::Env>(
+        "AWS",
+        [](const std::string& /*uri*/, std::unique_ptr<rocksdb::Env>* /*guard*/,
+           std::string* /*errmsg*/) {
+          AwsEnv *env = new rocksdb::AwsEnv(rocksdb::Env::Default(), rocksdb::CloudEnvOptions(), nullptr);
+          env->TEST_DisableCloudManifest(); //**MJR: TODO
+          printf("MJR: Loading AWS Environment\n");
+          return env;
+        });
+  }
 #endif // USE_AWS
   library.Register<rocksdb::CloudStorageProvider>(
       "s3",

@@ -64,28 +64,14 @@ Status Env::CreateFromString(const std::string& value, const ConfigOptions& opti
   assert(result);
   Status s;
 #ifndef ROCKSDB_LITE
-  Env* env = nullptr;
-  std::unique_ptr<Env> uniq_guard;
-  std::string err_msg;
-  assert(guard != nullptr);
-  env = options.registry->NewObject<Env>(value, &uniq_guard, &err_msg);
-  if (!env) {
-    s = Status::NotFound(std::string("Cannot load ") + Env::Type() + ": " +
-                         value);
-    env = Env::Default();
-  }
-  if (s.ok() && uniq_guard) {
-    guard->reset(uniq_guard.release());
-    *result = guard->get();
-  } else {
-    *result = env;
-  }
+  s = LoadSharedObject<Env>(value, nullptr, options, guard);
 #else
   (void)options;
-  (void)result;
-  (void)guard;
   s = Status::NotSupported("Cannot load environment in LITE mode: ", value);
 #endif
+  if (s.ok()) {
+    *result = guard->get();
+  }
   return s;
 }
 

@@ -149,7 +149,7 @@ case "$TARGET_OS" in
         else
             PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -latomic"
         fi
-        PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -lpthread -lrt"
+        PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -lpthread -ldl -lrt"
         # check for liburing
         $CXX $CFLAGS -x c++ - -luring -o /dev/null 2>/dev/null  <<EOF
           #include <liburing.h>
