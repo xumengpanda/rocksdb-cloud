@@ -1117,6 +1117,14 @@ struct DBOptions {
   //
   // Default: 0
   size_t log_readahead_size = 0;
+
+  // During recovery, DB will not attempt to read table files to cache. This is
+  // useful in cases we want lazy initialization.
+  //
+  // Default: false.
+  bool avoid_read_during_recovery = false;
+
+  int disable_delete_obsolete_files = 0;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

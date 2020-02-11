@@ -6,8 +6,10 @@
 #include <time.h>
 #include <algorithm>
 #include <iostream>
+
 #include "cloud/cloud_env_impl.h"
 #include "port/sys_time.h"
+#include "util/random.h"
 
 #ifdef USE_AWS
 
@@ -328,6 +330,7 @@ class AwsEnv : public CloudEnvImpl {
   std::chrono::seconds file_deletion_delay_ = std::chrono::hours(1);
   std::unordered_map<std::string, std::shared_ptr<detail::JobHandle>>
       files_to_delete_;
+  Random64 rng_;
 
   Aws::S3::Model::BucketLocationConstraint bucket_location_;
 

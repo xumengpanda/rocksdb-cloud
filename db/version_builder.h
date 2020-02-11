@@ -36,7 +36,8 @@ class VersionBuilder {
   Status LoadTableHandlers(InternalStats* internal_stats, int max_threads,
                            bool prefetch_index_and_filter_in_cache,
                            bool is_initial_load,
-                           const SliceTransform* prefix_extractor);
+                           const SliceTransform* prefix_extractor,
+                           bool no_io = false);
   void MaybeAddFile(VersionStorageInfo* vstorage, int level, FileMetaData* f);
 
  private:

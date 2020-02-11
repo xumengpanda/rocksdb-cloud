@@ -12,7 +12,6 @@
 
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
-#include "util/random.h"
 #include "util/stderr_logger.h"
 #include "util/string_util.h"
 
@@ -394,7 +393,8 @@ Aws::S3::Model::HeadObjectOutcome AwsS3ClientWrapper::HeadObject(
 //
 AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options,
                const std::shared_ptr<Logger>& info_log)
-  : CloudEnvImpl(_cloud_env_options, underlying_env, info_log) {
+    : CloudEnvImpl(_cloud_env_options, underlying_env, info_log),
+      rng_(time(nullptr)) {
   Aws::InitAPI(Aws::SDKOptions());
   if (cloud_env_options.src_bucket.GetRegion().empty() ||
       cloud_env_options.dest_bucket.GetRegion().empty()) {
@@ -1800,9 +1800,12 @@ Status AwsEnv::GetObject(const std::string& bucket_name,
                          const std::string& object_path,
                          const std::string& local_destination) {
   Env* localenv = GetBaseEnv();
-  Random64 rng(time(nullptr));
   std::string tmp_destination =
-      local_destination + ".tmp" + std::to_string(rng.Next());
+      local_destination + ".tmp-" + std::to_string(rng_.Next());
+
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[s3] Getting %s/%s to local dst: %s, tmp dst: %s", bucket_name.c_str(),
+      object_path.c_str(), local_destination.c_str(), tmp_destination.c_str());
 
   GetObjectResult result;
   if (cloud_env_options.use_aws_transfer_manager) {
@@ -1827,11 +1830,17 @@ Status AwsEnv::GetObject(const std::string& bucket_name,
     return Status::IOError(std::move(errmsg));
   }
 
+  Log(InfoLogLevel::INFO_LEVEL, info_log_, "[s3] Checking size for %s",
+      tmp_destination.c_str());
+
   // Check if our local file is the same as S3 promised
   uint64_t file_size{0};
   auto s = localenv->GetFileSize(tmp_destination, &file_size);
   if (!s.ok()) {
-      return s;
+    Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+        "[s3] Fail to check size for %s, error: %s", tmp_destination.c_str(),
+        s.ToString().c_str());
+    return s;
   }
   if (file_size != result.objectSize) {
     localenv->DeleteFile(tmp_destination);
@@ -1847,6 +1856,9 @@ Status AwsEnv::GetObject(const std::string& bucket_name,
   if (s.ok()) {
     s = localenv->RenameFile(tmp_destination, local_destination);
   }
+  Log(InfoLogLevel::INFO_LEVEL, info_log_,
+      "[s3] Successfully rename from %s to %s", tmp_destination.c_str(),
+      local_destination.c_str());
   Log(InfoLogLevel::INFO_LEVEL, info_log_,
       "[s3] GetObject %s/%s size %" PRIu64 ". %s", bucket_name.c_str(),
       object_path.c_str(), file_size, s.ToString().c_str());

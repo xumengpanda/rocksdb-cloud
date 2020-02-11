@@ -399,7 +399,8 @@ class VersionBuilder::Rep {
   Status LoadTableHandlers(InternalStats* internal_stats, int max_threads,
                            bool prefetch_index_and_filter_in_cache,
                            bool is_initial_load,
-                           const SliceTransform* prefix_extractor) {
+                           const SliceTransform* prefix_extractor,
+                           bool no_io) {
     assert(table_cache_ != nullptr);
 
     size_t table_cache_capacity = table_cache_->get_cache()->GetCapacity();
@@ -463,17 +464,22 @@ class VersionBuilder::Rep {
 
         auto* file_meta = files_meta[file_idx].first;
         int level = files_meta[file_idx].second;
+        fprintf(stderr, "Starting FindTable");
         statuses[file_idx] = table_cache_->FindTable(
             env_options_, *(base_vstorage_->InternalComparator()),
             file_meta->fd, &file_meta->table_reader_handle, prefix_extractor,
-            false /*no_io */, true /* record_read_stats */,
+            no_io, true /* record_read_stats */,
             internal_stats->GetFileReadHist(level), false, level,
             prefetch_index_and_filter_in_cache);
-        if (file_meta->table_reader_handle != nullptr) {
+
+        fprintf(stderr, "Finish FindTable");
+        if (file_meta->table_reader_handle != nullptr && !no_io) {
+          fprintf(stderr, "Starting GetTableReaderFromHandle");
           // Load table_reader
           file_meta->fd.table_reader = table_cache_->GetTableReaderFromHandle(
               file_meta->table_reader_handle);
         }
+        fprintf(stderr, "Finish GetTableReaderFromHandle");
       }
     });
 
@@ -533,10 +539,11 @@ Status VersionBuilder::SaveTo(VersionStorageInfo* vstorage) {
 Status VersionBuilder::LoadTableHandlers(
     InternalStats* internal_stats, int max_threads,
     bool prefetch_index_and_filter_in_cache, bool is_initial_load,
-    const SliceTransform* prefix_extractor) {
+    const SliceTransform* prefix_extractor,
+    bool no_io) {
   return rep_->LoadTableHandlers(internal_stats, max_threads,
                                  prefetch_index_and_filter_in_cache,
-                                 is_initial_load, prefix_extractor);
+                                 is_initial_load, prefix_extractor, no_io);
 }
 
 void VersionBuilder::MaybeAddFile(VersionStorageInfo* vstorage, int level,

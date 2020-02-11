@@ -2027,13 +2027,21 @@ void VersionStorageInfo::GenerateLevelFilesBrief() {
 void Version::PrepareApply(
     const MutableCFOptions& mutable_cf_options,
     bool update_stats) {
+  fprintf(stderr, "UpdateAccumulatedStats\n");
   UpdateAccumulatedStats(update_stats);
+  fprintf(stderr, "UpdateNumNonEmptyLevels\n");
   storage_info_.UpdateNumNonEmptyLevels();
+  fprintf(stderr, "CalculateBaseBytes\n");
   storage_info_.CalculateBaseBytes(*cfd_->ioptions(), mutable_cf_options);
+  fprintf(stderr, "UpdateFilesByCompactionPri\n");
   storage_info_.UpdateFilesByCompactionPri(cfd_->ioptions()->compaction_pri);
+  fprintf(stderr, "GenerateFileIndexer\n");
   storage_info_.GenerateFileIndexer();
+  fprintf(stderr, "GenerateLevelFilesBrief\n");
   storage_info_.GenerateLevelFilesBrief();
+  fprintf(stderr, "GenerateLevel0NonOverlapping\n");
   storage_info_.GenerateLevel0NonOverlapping();
+  fprintf(stderr, "GenerateBottommostFiles\n");
   storage_info_.GenerateBottommostFiles();
 }
 
@@ -4355,6 +4363,12 @@ Status VersionSet::Recover(
   builders.insert(
       std::make_pair(0, std::unique_ptr<BaseReferencedVersionBuilder>(
                             new BaseReferencedVersionBuilder(default_cfd))));
+
+  ROCKS_LOG_INFO(db_options_->info_log,
+                 "Started loading log"
+                 " with avoid_read_during_recovery: %d",
+                 db_options_->avoid_read_during_recovery);
+
   VersionEditParams version_edit_params;
   {
     VersionSet::LogReporter reporter;
@@ -4368,6 +4382,11 @@ Status VersionSet::Recover(
                        column_families_not_found, builders,
                        &version_edit_params, db_id);
   }
+
+  ROCKS_LOG_INFO(db_options_->info_log,
+                 "Done loading log"
+                 " with avoid_read_during_recovery: %d",
+                 db_options_->avoid_read_during_recovery);
 
   if (s.ok()) {
     if (!version_edit_params.has_next_file_number_) {
@@ -4430,22 +4449,36 @@ Status VersionSet::Recover(
       assert(builders_iter != builders.end());
       auto builder = builders_iter->second->version_builder();
 
+      ROCKS_LOG_INFO(db_options_->info_log,
+                     "Starting loading table handlers"
+                     " with avoid_read_during_recovery: %d",
+                     db_options_->avoid_read_during_recovery);
+
       // unlimited table cache. Pre-load table handle now.
       // Need to do it out of the mutex.
       builder->LoadTableHandlers(
           cfd->internal_stats(), db_options_->max_file_opening_threads,
           false /* prefetch_index_and_filter_in_cache */,
           true /* is_initial_load */,
-          cfd->GetLatestMutableCFOptions()->prefix_extractor.get());
+          cfd->GetLatestMutableCFOptions()->prefix_extractor.get(),
+          db_options_->avoid_read_during_recovery);
+
+      ROCKS_LOG_INFO(db_options_->info_log,
+                     "Done loading table handlers"
+                     " with avoid_read_during_recovery: %d",
+                     db_options_->avoid_read_during_recovery);
 
       Version* v = new Version(cfd, this, env_options_,
                                *cfd->GetLatestMutableCFOptions(),
                                current_version_number_++);
+      fprintf(stderr, "SaveTo\n");
       builder->SaveTo(v->storage_info());
 
       // Install recovered version
+      fprintf(stderr, "PrepareApply\n");
       v->PrepareApply(*cfd->GetLatestMutableCFOptions(),
           !(db_options_->skip_stats_update_on_db_open));
+      fprintf(stderr, "AppendVersion\n");
       AppendVersion(cfd, v);
     }
 

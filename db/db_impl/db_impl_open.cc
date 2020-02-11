@@ -1356,6 +1356,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   impl->mutex_.Lock();
   // Handles create_if_missing, error_if_exists
   s = impl->Recover(column_families);
+  fprintf(stderr, "Done recovering\n");
   if (s.ok()) {
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     log::Writer* new_log = nullptr;
@@ -1398,6 +1399,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
         }
       }
     }
+    fprintf(stderr, "Done recovering 1402\n");
     if (s.ok()) {
       SuperVersionContext sv_context(/* create_superversion */ true);
       for (auto cfd : *impl->versions_->GetColumnFamilySet()) {
@@ -1417,11 +1419,12 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
       s = impl->directories_.GetDbDir()->Fsync();
     }
   }
+  fprintf(stderr, "Done recovering 1422\n");
   if (s.ok() && impl->immutable_db_options_.persist_stats_to_disk) {
     // try to read format version but no need to fail Open() even if it fails
     s = impl->PersistentStatsProcessFormatVersion();
   }
-
+  fprintf(stderr, "Done recovering 1427\n");
   if (s.ok()) {
     for (auto cfd : *impl->versions_->GetColumnFamilySet()) {
       if (cfd->ioptions()->compaction_style == kCompactionStyleFIFO) {
@@ -1451,6 +1454,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
       }
     }
   }
+  fprintf(stderr, "OPENED!\n");
   TEST_SYNC_POINT("DBImpl::Open:Opened");
   Status persist_options_status;
   if (s.ok()) {
@@ -1464,7 +1468,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     impl->MaybeScheduleFlushOrCompaction();
   }
   impl->mutex_.Unlock();
-
+  fprintf(stderr, "MaybeScheduleFlushOrCompaction!\n");
 #ifndef ROCKSDB_LITE
   auto sfm = static_cast<SstFileManagerImpl*>(
       impl->immutable_db_options_.sst_file_manager.get());
@@ -1503,6 +1507,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     sfm->ReserveDiskBuffer(max_write_buffer_size,
                            impl->immutable_db_options_.db_paths[0].path);
   }
+  fprintf(stderr, "RESERVE DISK BUFFER!\n");
 #endif  // !ROCKSDB_LITE
 
   if (s.ok()) {
