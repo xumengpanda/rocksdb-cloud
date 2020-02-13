@@ -134,9 +134,8 @@ Status DBImpl::doCompact(const CompactionOptions& compact_options,
   c->ReleaseCompactionFiles(s);
 
   // Make sure SstFileManager does its bookkeeping
-  auto sfm = static_cast<SstFileManagerImpl*>(
-      immutable_db_options_.sst_file_manager.get());
-  if (sfm) {
+  if (auto sfm = dynamic_cast<SstFileManagerImpl*>(
+          immutable_db_options_.sst_file_manager.get())) {
     sfm->OnCompactionCompletion(c.get());
   }
 
