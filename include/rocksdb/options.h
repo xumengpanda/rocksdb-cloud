@@ -1117,6 +1117,16 @@ struct DBOptions {
   //
   // Default: 0
   size_t log_readahead_size = 0;
+
+  // Disabling deletion of obsolete files. This is useful in scenario where users
+  // want to open the DB quickly.
+  //
+  // Default: false
+  bool disable_delete_obsolete_files = false;
+
+  // Open DB in quick open mode. Various functions are disabled, such as
+  // directory cleanup.
+  bool quick_open_mode = false;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

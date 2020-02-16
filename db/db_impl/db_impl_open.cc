@@ -123,7 +123,7 @@ DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
 
 #ifndef ROCKSDB_LITE
   ImmutableDBOptions immutable_db_options(result);
-  if (!IsWalDirSameAsDBPath(&immutable_db_options)) {
+  if (!IsWalDirSameAsDBPath(&immutable_db_options) && !result.quick_open_mode) {
     // Either the WAL dir and db_paths[0]/db_name are not the same, or we
     // cannot tell for sure. In either case, assume they're different and
     // explicitly cleanup the trash log files (bypass DeleteScheduler)
@@ -146,10 +146,11 @@ DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
   // and schedule them to be deleted (or delete immediately if SstFileManager
   // was not used)
   auto sfm = dynamic_cast<SstFileManagerImpl*>(result.sst_file_manager.get());
-  for (size_t i = 0; i < result.db_paths.size(); i++) {
-    DeleteScheduler::CleanupDirectory(result.env, sfm, result.db_paths[i].path);
+  if (sfm && !result.quick_open_mode) {
+    for (size_t i = 0; i < result.db_paths.size(); i++) {
+      DeleteScheduler::CleanupDirectory(result.env, sfm, result.db_paths[i].path);
+    }
   }
-
   // Create a default SstFileManager for purposes of tracking compaction size
   // and facilitating recovery from out of space errors.
   if (result.sst_file_manager.get() == nullptr) {
@@ -244,7 +245,6 @@ Status DBImpl::NewDB() {
   new_db.SetNextFile(2);
   new_db.SetLastSequence(0);
 
-  ROCKS_LOG_INFO(immutable_db_options_.info_log, "Creating manifest 1 \n");
   const std::string manifest = DescriptorFileName(dbname_, 1);
   {
     std::unique_ptr<WritableFile> file;
@@ -471,66 +471,67 @@ Status DBImpl::Recover(
     // Note that prev_log_number() is no longer used, but we pay
     // attention to it in case we are recovering a database
     // produced by an older version of rocksdb.
-    std::vector<std::string> filenames;
-    s = env_->GetChildren(immutable_db_options_.wal_dir, &filenames);
-    if (s.IsNotFound()) {
-      return Status::InvalidArgument("wal_dir not found",
-                                     immutable_db_options_.wal_dir);
-    } else if (!s.ok()) {
-      return s;
-    }
+    if (!immutable_db_options_.quick_open_mode) {
+      std::vector<std::string> filenames;
+      s = env_->GetChildren(immutable_db_options_.wal_dir, &filenames);
+      if (s.IsNotFound()) {
+        return Status::InvalidArgument("wal_dir not found",
+                                       immutable_db_options_.wal_dir);
+      } else if (!s.ok()) {
+        return s;
+      }
 
-    std::vector<uint64_t> logs;
-    for (size_t i = 0; i < filenames.size(); i++) {
-      uint64_t number;
-      FileType type;
-      if (ParseFileName(filenames[i], &number, &type) && type == kLogFile) {
-        if (is_new_db) {
-          return Status::Corruption(
-              "While creating a new Db, wal_dir contains "
-              "existing log file: ",
-              filenames[i]);
-        } else {
-          logs.push_back(number);
+      std::vector<uint64_t> logs;
+      for (size_t i = 0; i < filenames.size(); i++) {
+        uint64_t number;
+        FileType type;
+        if (ParseFileName(filenames[i], &number, &type) && type == kLogFile) {
+          if (is_new_db) {
+            return Status::Corruption(
+                "While creating a new Db, wal_dir contains "
+                "existing log file: ",
+                filenames[i]);
+          } else {
+            logs.push_back(number);
+          }
         }
       }
-    }
 
-    if (logs.size() > 0) {
-      if (error_if_log_file_exist) {
-        return Status::Corruption(
-            "The db was opened in readonly mode with error_if_log_file_exist"
-            "flag but a log file already exists");
-      } else if (error_if_data_exists_in_logs) {
-        for (auto& log : logs) {
-          std::string fname = LogFileName(immutable_db_options_.wal_dir, log);
-          uint64_t bytes;
-          s = env_->GetFileSize(fname, &bytes);
-          if (s.ok()) {
-            if (bytes > 0) {
-              return Status::Corruption(
-                  "error_if_data_exists_in_logs is set but there are data "
-                  " in log files.");
+      if (logs.size() > 0) {
+        if (error_if_log_file_exist) {
+          return Status::Corruption(
+              "The db was opened in readonly mode with error_if_log_file_exist"
+              "flag but a log file already exists");
+        } else if (error_if_data_exists_in_logs) {
+          for (auto& log : logs) {
+            std::string fname = LogFileName(immutable_db_options_.wal_dir, log);
+            uint64_t bytes;
+            s = env_->GetFileSize(fname, &bytes);
+            if (s.ok()) {
+              if (bytes > 0) {
+                return Status::Corruption(
+                    "error_if_data_exists_in_logs is set but there are data "
+                    " in log files.");
+              }
             }
           }
         }
       }
-    }
 
-    if (!logs.empty()) {
-      // Recover in the order in which the logs were generated
-      std::sort(logs.begin(), logs.end());
-      s = RecoverLogFiles(logs, &next_sequence, read_only);
-      if (!s.ok()) {
-        // Clear memtables if recovery failed
-        for (auto cfd : *versions_->GetColumnFamilySet()) {
-          cfd->CreateNewMemtable(*cfd->GetLatestMutableCFOptions(),
-                                 kMaxSequenceNumber);
+      if (!logs.empty()) {
+        // Recover in the order in which the logs were generated
+        std::sort(logs.begin(), logs.end());
+        s = RecoverLogFiles(logs, &next_sequence, read_only);
+        if (!s.ok()) {
+          // Clear memtables if recovery failed
+          for (auto cfd : *versions_->GetColumnFamilySet()) {
+            cfd->CreateNewMemtable(*cfd->GetLatestMutableCFOptions(),
+                                   kMaxSequenceNumber);
+          }
         }
       }
     }
   }
-
   if (read_only) {
     // If we are opening as read-only, we need to update options_file_number_
     // to reflect the most recent OPTIONS file. It does not matter for regular
@@ -1398,6 +1399,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
         }
       }
     }
+
     if (s.ok()) {
       SuperVersionContext sv_context(/* create_superversion */ true);
       for (auto cfd : *impl->versions_->GetColumnFamilySet()) {

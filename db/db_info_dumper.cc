@@ -22,6 +22,12 @@ void DumpDBFileSummary(const ImmutableDBOptions& options,
     return;
   }
 
+  // Put it separately for ease of merging with RocksDB.
+  if (options.quick_open_mode) {
+    Header(options.info_log, "Skipping Dump DB File Summary");
+    return;
+  }
+
   auto* env = options.env;
   uint64_t number = 0;
   FileType type = kInfoLogFile;
