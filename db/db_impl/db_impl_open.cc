@@ -1357,6 +1357,8 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   impl->mutex_.Lock();
   // Handles create_if_missing, error_if_exists
   s = impl->Recover(column_families);
+  ROCKS_LOG_INFO(impl->immutable_db_options_.info_log, "Done Recovering");
+  LogFlush(impl->immutable_db_options_.info_log);
   if (s.ok()) {
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     log::Writer* new_log = nullptr;
@@ -1463,7 +1465,13 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
 
     *dbptr = impl;
     impl->opened_successfully_ = true;
+    ROCKS_LOG_INFO(impl->immutable_db_options_.info_log,
+                   "Started schdule flush or compaction");
+    LogFlush(impl->immutable_db_options_.info_log);
     impl->MaybeScheduleFlushOrCompaction();
+    ROCKS_LOG_INFO(impl->immutable_db_options_.info_log,
+                   "Done schdule flush or compaction");
+    LogFlush(impl->immutable_db_options_.info_log);
   }
   impl->mutex_.Unlock();
 
@@ -1471,6 +1479,8 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   auto sfm = dynamic_cast<SstFileManagerImpl*>(
       impl->immutable_db_options_.sst_file_manager.get());
   if (s.ok() && sfm) {
+    ROCKS_LOG_INFO(impl->immutable_db_options_.info_log, "SHOULD NOT BE HERE");
+    LogFlush(impl->immutable_db_options_.info_log);
     // Notify SstFileManager about all sst files that already exist in
     // db_paths[0] and cf_paths[0] when the DB is opened.
     std::vector<std::string> paths;
