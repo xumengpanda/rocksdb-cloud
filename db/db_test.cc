@@ -1653,6 +1653,8 @@ TEST_F(DBTest, HiddenValuesAreRemoved) {
   anon::OptionsOverride options_override;
   options_override.skip_policy = kSkipNoSnapshot;
   do {
+    fprintf(stderr, "Current option: %d, %d\n", int(option_config_),
+            option_env_);
     Options options = CurrentOptions(options_override);
     CreateAndReopenWithCF({"pikachu"}, options);
     Random rnd(301);

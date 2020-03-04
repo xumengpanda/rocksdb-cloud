@@ -639,7 +639,7 @@ Env* DBTestBase::CreateNewAwsEnv(const std::string& prefix) {
   rocksdb::CloudEnvOptions coptions;
   CloudEnv* cenv = nullptr;
   std::string region;
-  coptions.TEST_Initialize("dbtest.", prefix, region);
+  coptions.TEST_Initialize("dbtestaws.", prefix, region);
   Status st = AwsEnv::NewAwsEnv(Env::Default(), coptions, info_log_, &cenv);
   ((CloudEnvImpl*)cenv)->TEST_DisableCloudManifest();
   ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
