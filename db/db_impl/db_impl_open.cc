@@ -464,6 +464,8 @@ Status DBImpl::Recover(
     single_column_family_mode_ =
         versions_->GetColumnFamilySet()->NumberOfColumnFamilies() == 1;
 
+    auto log_recovery_start_time = env_->NowMicros();
+
     // Recover from all newer log files than the ones named in the
     // descriptor (new log files may have been added by the previous
     // incarnation without registering them in the descriptor).
@@ -529,6 +531,10 @@ Status DBImpl::Recover(
         }
       }
     }
+
+    auto log_recovery_duration = env_->NowMicros() - log_recovery_start_time;
+    ROCKS_LOG_INFO(immutable_db_options_.info_log,
+                   "Recovering log takes %lu us", log_recovery_duration);
   }
 
   if (read_only) {
@@ -1465,6 +1471,8 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   }
   impl->mutex_.Unlock();
 
+  auto start = impl->env_->NowMicros();
+
 #ifndef ROCKSDB_LITE
   auto sfm = static_cast<SstFileManagerImpl*>(
       impl->immutable_db_options_.sst_file_manager.get());
@@ -1494,6 +1502,9 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
         }
       }
     }
+    fprintf(stderr, "[DEBUG] NotifySSTFileManagerImpl takes %lu us\n",
+            impl->env_->NowMicros() - start);
+    start = impl->env_->NowMicros();
 
     // Reserve some disk buffer space. This is a heuristic - when we run out
     // of disk space, this ensures that there is atleast write_buffer_size
@@ -1502,6 +1513,8 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     // WAL write failures and resultant forced flushes
     sfm->ReserveDiskBuffer(max_write_buffer_size,
                            impl->immutable_db_options_.db_paths[0].path);
+    fprintf(stderr, "[DEBUG] ReserveDiskBuffer takes %lu us\n",
+            impl->env_->NowMicros() - start);
   }
 #endif  // !ROCKSDB_LITE
 
