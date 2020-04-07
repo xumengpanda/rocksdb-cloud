@@ -12,6 +12,7 @@
 #include "cloud/aws/aws_env.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
+#include "env/composite_env_wrapper.h"
 #include "file/file_util.h"
 #include "logging/auto_roll_logger.h"
 #include "rocksdb/db.h"
@@ -275,9 +276,9 @@ Status DBCloudImpl::DoCheckpointToCloud(
   auto current_epoch = cenv->GetCloudManifest()->GetCurrentEpoch().ToString();
   auto manifest_fname = ManifestFileWithEpoch("", current_epoch);
   auto tmp_manifest_fname = manifest_fname + ".tmp";
-  st =
-      CopyFile(base_env, GetName() + "/" + manifest_fname,
-               GetName() + "/" + tmp_manifest_fname, manifest_file_size, false);
+  LegacyFileSystemWrapper fs(base_env);    
+  st = CopyFile(&fs, GetName() + "/" + manifest_fname,
+                GetName() + "/" + tmp_manifest_fname, manifest_file_size, false);
   if (!st.ok()) {
     return st;
   }
