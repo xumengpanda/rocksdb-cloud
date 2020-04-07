@@ -16,7 +16,7 @@
 #endif
 #include "rocksdb/utilities/object_registry.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 // Special Env used to delay background operations
 
@@ -105,9 +105,9 @@ DBTestBase::DBTestBase(const std::string path)
 }
 
 DBTestBase::~DBTestBase() {
-  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
-  rocksdb::SyncPoint::GetInstance()->LoadDependency({});
-  rocksdb::SyncPoint::GetInstance()->ClearAllCallBacks();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency({});
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
   Close();
   Options options;
   options.db_paths.emplace_back(dbname_, 0);
@@ -377,9 +377,10 @@ Options DBTestBase::GetOptions(
   bool set_block_based_table_factory = true;
 #if !defined(OS_MACOSX) && !defined(OS_WIN) && !defined(OS_SOLARIS) && \
     !defined(OS_AIX)
-  rocksdb::SyncPoint::GetInstance()->ClearCallBack(
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearCallBack(
       "NewRandomAccessFile:O_DIRECT");
-  rocksdb::SyncPoint::GetInstance()->ClearCallBack("NewWritableFile:O_DIRECT");
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearCallBack(
+      "NewWritableFile:O_DIRECT");
 #endif
 
   bool can_allow_mmap = IsMemoryMappedAccessSupported();
@@ -437,18 +438,18 @@ Options DBTestBase::GetOptions(
         options.compaction_readahead_size = 2 * 1024 * 1024;
   #if !defined(OS_MACOSX) && !defined(OS_WIN) && !defined(OS_SOLARIS) && \
       !defined(OS_AIX) && !defined(OS_OPENBSD)
-        rocksdb::SyncPoint::GetInstance()->SetCallBack(
+        ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
             "NewWritableFile:O_DIRECT", [&](void* arg) {
               int* val = static_cast<int*>(arg);
               *val &= ~O_DIRECT;
             });
-        rocksdb::SyncPoint::GetInstance()->SetCallBack(
+        ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
             "NewRandomAccessFile:O_DIRECT", [&](void* arg) {
               int* val = static_cast<int*>(arg);
               *val &= ~O_DIRECT;
             });
-        rocksdb::SyncPoint::GetInstance()->EnableProcessing();
-  #endif
+        ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+#endif
         break;
       }
 #endif  // ROCKSDB_LITE
@@ -1650,4 +1651,4 @@ uint64_t DBTestBase::GetNumberOfSstFilesForColumnFamily(
 }
 #endif  // ROCKSDB_LITE
 
-}  // namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
