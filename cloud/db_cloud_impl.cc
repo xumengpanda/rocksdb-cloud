@@ -14,7 +14,9 @@
 #include "cloud/manifest_reader.h"
 #include "env/composite_env_wrapper.h"
 #include "file/file_util.h"
+#include "file/sst_file_manager_impl.h"
 #include "logging/auto_roll_logger.h"
+#include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
@@ -24,6 +26,33 @@
 #include "util/xxhash.h"
 
 namespace rocksdb {
+
+namespace {
+/**
+ * This ConstantSstFileManager uses the same size for every sst files added.
+ */
+class ConstantSizeSstFileManager : public SstFileManagerImpl {
+ public:
+  ConstantSizeSstFileManager(int64_t constant_file_size, Env* env,
+                             std::shared_ptr<Logger> logger,
+                             int64_t rate_bytes_per_sec,
+                             double max_trash_db_ratio,
+                             uint64_t bytes_max_delete_chunk)
+      : SstFileManagerImpl(env, std::move(logger), rate_bytes_per_sec,
+                           max_trash_db_ratio, bytes_max_delete_chunk),
+        constant_file_size_(constant_file_size) {
+    assert(constant_file_size_ >= 0);
+  }
+
+  Status OnAddFile(const std::string& file_path, bool compaction) override {
+    return SstFileManagerImpl::OnAddFile(
+        file_path, uint64_t(constant_file_size_), compaction);
+  }
+
+ private:
+  const int64_t constant_file_size_;
+};
+}  // namespace
 
 DBCloudImpl::DBCloudImpl(DB* db) : DBCloud(db), cenv_(nullptr) {}
 
@@ -52,9 +81,6 @@ Status DBCloud::Open(const Options& options, const std::string& dbname,
   return s;
 }
 
-
-
-
 Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
                      const std::vector<ColumnFamilyDescriptor>& column_families,
                      const std::string& persistent_cache_path,
@@ -73,6 +99,23 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   if (!cenv->info_log_) {
     cenv->info_log_ = options.info_log;
   }
+
+  // Use a constant sized SST File Manager if necesary.
+  // NOTE: if user already passes in an SST File Manager, we will respect user's
+  // SST File Manager instead.
+  auto constant_sst_file_size =
+      cenv->GetCloudEnvOptions().constant_sst_file_size_in_sst_file_manager;
+  if (constant_sst_file_size >= 0 && options.sst_file_manager == nullptr) {
+    // rate_bytes_per_sec, max_trash_db_ratio, bytes_max_delete_chunk are
+    // default values in NewSstFileManager.
+    // If users don't use Options.sst_file_manager, then these values are used
+    // currently when creating an SST File Manager.
+    options.sst_file_manager = std::make_shared<ConstantSizeSstFileManager>(
+        constant_sst_file_size, options.env, options.info_log,
+        0 /* rate_bytes_per_sec */, 0.25 /* max_trash_db_ratio */,
+        64 * 1024 * 1024 /* bytes_max_delete_chunk */);
+  }
+
   Env* local_env = cenv->GetBaseEnv();
   if (!read_only) {
     local_env->CreateDirIfMissing(
@@ -173,12 +216,13 @@ Status DBCloudImpl::Savepoint() {
   std::vector<LiveFileMetaData> live_files;
   GetLiveFilesMetaData(&live_files);
 
+  auto& provider = cenv->GetCloudEnvOptions().storage_provider;
   // If an sst file does not exist in the destination path, then remember it
   std::vector<std::string> to_copy;
   for (auto onefile : live_files) {
     auto remapped_fname = cenv->RemapFilename(onefile.name);
     std::string destpath = cenv->GetDestObjectPath() + "/" + remapped_fname;
-    if (!cenv->ExistsObject(cenv->GetDestBucketName(), destpath).ok()) {
+    if (!provider->ExistsObject(cenv->GetDestBucketName(), destpath).ok()) {
       to_copy.push_back(remapped_fname);
     }
   }
@@ -194,7 +238,7 @@ Status DBCloudImpl::Savepoint() {
         break;
       }
       auto& onefile = to_copy[idx];
-      Status s = cenv->CopyObject(
+      Status s = provider->CopyObject(
           cenv->GetSrcBucketName(), cenv->GetSrcObjectPath() + "/" + onefile,
           cenv->GetDestBucketName(), cenv->GetDestObjectPath() + "/" + onefile);
       if (!s.ok()) {
@@ -293,6 +337,7 @@ Status DBCloudImpl::DoCheckpointToCloud(
   thread_statuses.resize(thread_count);
 
   auto do_copy = [&](size_t threadId) {
+    auto& provider = cenv->GetCloudEnvOptions().storage_provider;
     while (true) {
       size_t idx = next_file_to_copy.fetch_add(1);
       if (idx >= files_to_copy.size()) {
@@ -300,9 +345,9 @@ Status DBCloudImpl::DoCheckpointToCloud(
       }
 
       auto& f = files_to_copy[idx];
-      auto copy_st =
-          cenv->PutObject(GetName() + "/" + f.first, destination.GetBucketName(),
-                          destination.GetObjectPath() + "/" + f.second);
+      auto copy_st = provider->PutObject(
+          GetName() + "/" + f.first, destination.GetBucketName(),
+          destination.GetObjectPath() + "/" + f.second);
       if (!copy_st.ok()) {
         thread_statuses[threadId] = std::move(copy_st);
         break;
@@ -340,5 +385,27 @@ Status DBCloudImpl::DoCheckpointToCloud(
                       destination.GetObjectPath());
   return st;
 }
+
+Status DBCloudImpl::ExecuteRemoteCompactionRequest(
+      const PluggableCompactionParam& inputParams,
+      PluggableCompactionResult* result ,
+      bool doSanitize) {
+  auto cenv = static_cast<CloudEnvImpl*>(GetEnv());
+
+  // run the compaction request on the underlying local database
+  Status status = GetBaseDB()->ExecuteRemoteCompactionRequest(inputParams,
+		  result, doSanitize);
+  if (!status.ok()) {
+    return status;
+  }
+
+  // convert the local pathnames to the cloud pathnames
+  for (unsigned int i = 0; i < result->output_files.size(); i++) {
+      OutputFile* outfile = &result->output_files[i];
+      outfile->pathname = cenv->RemapFilename(outfile->pathname);
+  }
+  return Status::OK();
+}
+
 }  // namespace rocksdb
 #endif  // ROCKSDB_LITE

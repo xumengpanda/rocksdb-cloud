@@ -6,10 +6,10 @@
 #include "cloud/aws/aws_env.h"
 #include "cloud/cloud_env_impl.h"
 #include "cloud/cloud_env_wrapper.h"
-#include "cloud/cloud_log_controller.h"
 #include "cloud/db_cloud_impl.h"
 #include "cloud/filename.h"
 #include "port/likely.h"
+#include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
@@ -93,8 +93,6 @@ CloudEnv::CloudEnv(const CloudEnvOptions& options, Env *base, const std::shared_
 }
   
 CloudEnv::~CloudEnv() {}
-
-CloudEnvWrapper::~CloudEnvWrapper() {}
 
 Status CloudEnv::NewAwsEnv(
     Env* base_env, const std::string& src_cloud_bucket,

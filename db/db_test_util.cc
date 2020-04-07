@@ -13,6 +13,7 @@
 #include "rocksdb/env_encryption.h"
 #ifdef USE_AWS
 #include "cloud/cloud_env_impl.h"
+#include "rocksdb/cloud/cloud_storage_provider.h"
 #endif
 #include "rocksdb/utilities/object_registry.h"
 
@@ -81,6 +82,7 @@ DBTestBase::DBTestBase(const std::string path)
                                        : (mem_env_ ? mem_env_ : base_env));
 #ifdef USE_AWS
   // Randomize the test path so that multiple tests can run in parallel
+  srand(static_cast<unsigned int>(time(nullptr)));
   std::string mypath = path + "_" + std::to_string(rand());
   option_env_ = kDefaultEnv;
   env_->NewLogger(test::TmpDir(env_) + "/rocksdb-cloud.log", &info_log_);
@@ -122,6 +124,12 @@ DBTestBase::~DBTestBase() {
     EXPECT_OK(DestroyDB(dbname_, options));
   }
   delete env_;
+
+#ifdef USE_AWS
+  auto aenv = dynamic_cast<CloudEnv*>(s3_env_);
+  aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+      aenv->GetSrcBucketName(), aenv->GetSrcObjectPath());
+#endif
   delete s3_env_;
 }
 
@@ -635,6 +643,10 @@ Options DBTestBase::GetOptions(
 
 #ifdef USE_AWS
 Env* DBTestBase::CreateNewAwsEnv(const std::string& prefix) {
+  if (!prefix.empty()) {
+    fprintf(stderr, "Creating new AWS env with prefix %s\n", prefix.c_str());
+  }
+
   // get AWS credentials
   rocksdb::CloudEnvOptions coptions;
   CloudEnv* cenv = nullptr;
@@ -734,7 +746,8 @@ void DBTestBase::Destroy(const Options& options, bool delete_cf_paths) {
 #ifdef USE_AWS
   if (s3_env_) {
     AwsEnv* aenv = static_cast<AwsEnv *>(s3_env_);
-    Status st = aenv->EmptyBucket(aenv->GetSrcBucketName(), dbname_);
+    Status st = aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+        aenv->GetSrcBucketName(), dbname_);
     ASSERT_TRUE(st.ok() || st.IsNotFound());
     for (int r = 0; r < 10; ++r) {
       // The existance is not propagated atomically in S3, so wait until
