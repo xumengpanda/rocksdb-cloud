@@ -67,7 +67,7 @@ Status CloudEnvImpl::LoadLocalCloudManifest(
     std::unique_ptr<SequentialFileReader>(
           new SequentialFileReader(NewLegacySequentialFileWrapper(file),
                                    cloud_manifest_file_name)),
-      &cloud_manifest_);
+      cloud_manifest);
 }
 
 std::string CloudEnvImpl::RemapFilename(const std::string& logical_path) const {

@@ -38,8 +38,9 @@ class ConstantSizeSstFileManager : public SstFileManagerImpl {
                              int64_t rate_bytes_per_sec,
                              double max_trash_db_ratio,
                              uint64_t bytes_max_delete_chunk)
-      : SstFileManagerImpl(env, std::move(logger), rate_bytes_per_sec,
-                           max_trash_db_ratio, bytes_max_delete_chunk),
+    : SstFileManagerImpl(env, std::make_shared<LegacyFileSystemWrapper>(env),
+                         std::move(logger), rate_bytes_per_sec,
+                         max_trash_db_ratio, bytes_max_delete_chunk),
         constant_file_size_(constant_file_size) {
     assert(constant_file_size_ >= 0);
   }
