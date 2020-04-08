@@ -247,6 +247,8 @@ LIB_SOURCES =                                                   \
   cloud/manifest_reader.cc                                      \
   cloud/purge.cc                                                \
   cloud/cloud_manifest.cc                                       \
+  cloud/cloud_storage_provider.cc                               \
+  db/db_impl/db_impl_remote_compaction.cc
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\
@@ -306,7 +308,8 @@ FOLLY_SOURCES = \
 
 MAIN_SOURCES =                                                          \
   cloud/db_cloud_test.cc                                                \
-  cloud/cloud_manifest_test.cc                                           \
+  cloud/cloud_manifest_test.cc                                          \
+  db/remote_compaction.cc                                               \
   cache/cache_bench.cc                                                  \
   cache/cache_test.cc                                                   \
   db_stress_tool/db_stress.cc                                           \

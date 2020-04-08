@@ -456,6 +456,21 @@ class StackableDB : public DB {
     return db_->TryCatchUpWithPrimary();
   }
 #endif  // ROCKSDB_LITE
+  virtual Status ExecuteRemoteCompactionRequest(
+      const PluggableCompactionParam& inputParams,
+      PluggableCompactionResult* result,
+      bool sanitize) override {
+    return db_->ExecuteRemoteCompactionRequest(inputParams, result, sanitize);
+  }
+
+  virtual Status RegisterPluggableCompactionService(
+      std::unique_ptr<PluggableCompactionService> rservice) override {
+    return db_->RegisterPluggableCompactionService(std::move(rservice));
+  }
+
+  virtual void UnRegisterPluggableCompactionService() override {
+    db_->UnRegisterPluggableCompactionService();
+  }
 
  protected:
   DB* db_;

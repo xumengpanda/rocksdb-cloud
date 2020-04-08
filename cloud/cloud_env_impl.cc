@@ -1,11 +1,11 @@
 // Copyright (c) 2017 Rockset.
 #ifndef ROCKSDB_LITE
 
+#include "cloud/cloud_env_impl.h"
+
 #include <cinttypes>
 
-#include "cloud/cloud_env_impl.h"
 #include "cloud/cloud_env_wrapper.h"
-#include "cloud/cloud_log_controller.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
 #include "env/composite_env_wrapper.h"
@@ -13,6 +13,7 @@
 #include "file/file_util.h"
 #include "file/writable_file_writer.h"
 #include "port/likely.h"
+#include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
@@ -25,8 +26,8 @@ namespace rocksdb {
     : CloudEnv(opts, base, l), purger_is_running_(true) {}
 
 CloudEnvImpl::~CloudEnvImpl() {
-  if (cloud_log_controller_) {
-    cloud_log_controller_->StopTailingStream();
+  if (cloud_env_options.cloud_log_controller) {
+    cloud_env_options.cloud_log_controller->StopTailingStream();
   }
   StopPurger();
 }
@@ -48,17 +49,24 @@ Status CloudEnvImpl::LoadLocalCloudManifest(const std::string& dbname) {
   if (cloud_manifest_) {
     cloud_manifest_.reset();
   }
+  return CloudEnvImpl::LoadLocalCloudManifest(dbname, GetBaseEnv(),
+                                              &cloud_manifest_);
+}
+
+Status CloudEnvImpl::LoadLocalCloudManifest(
+    const std::string& dbname, Env* base_env,
+    std::unique_ptr<CloudManifest>* cloud_manifest) {
   std::unique_ptr<SequentialFile> file;
-  auto cloudManifestFile = CloudManifestFile(dbname);
-  auto s =
-      GetBaseEnv()->NewSequentialFile(cloudManifestFile, &file, EnvOptions());
+  auto cloud_manifest_file_name = CloudManifestFile(dbname);
+  auto s = base_env->NewSequentialFile(cloud_manifest_file_name, &file,
+                                       EnvOptions());
   if (!s.ok()) {
     return s;
   }
   return CloudManifest::LoadFromLog(
     std::unique_ptr<SequentialFileReader>(
-          new SequentialFileReader(NewLegacySequentialFileWrapper(file), cloudManifestFile)),
-      &cloud_manifest_);
+          new SequentialFileReader(NewLegacySequentialFileWrapper(file), cloud_manifest_file_name)),
+      cloud_manifest);
 }
 
 std::string CloudEnvImpl::RemapFilename(const std::string& logical_path) const {
@@ -105,13 +113,14 @@ std::string CloudEnvImpl::RemapFilename(const std::string& logical_path) const {
 Status CloudEnvImpl::DeleteInvisibleFiles(const std::string& dbname) {
   Status s;
   if (HasDestBucket()) {
-    BucketObjectMetadata metadata;
-    s = ListObjects(GetDestBucketName(), GetDestObjectPath(), &metadata);
+    std::vector<std::string> pathnames;
+    s = cloud_env_options.storage_provider->ListObjects(
+        GetDestBucketName(), GetDestObjectPath(), &pathnames);
     if (!s.ok()) {
       return s;
     }
 
-    for (auto& fname : metadata.pathnames) {
+    for (auto& fname : pathnames) {
       auto noepoch = RemoveEpoch(fname);
       if (IsSstFile(noepoch) || IsManifestFile(noepoch)) {
         if (RemapFilename(noepoch) != fname) {
@@ -440,6 +449,7 @@ Status CloudEnvImpl::NeedsReinitialization(const std::string& local_dir,
   }
 
   // We found a local dbid but we did not find this dbid in bucket registry.
+  // This is an ephemeral clone.
   if (src_object_path.empty() && dest_object_path.empty()) {
     Log(InfoLogLevel::ERROR_LEVEL, info_log_,
         "[cloud_env_impl] NeedsReinitialization: "
@@ -447,7 +457,31 @@ Status CloudEnvImpl::NeedsReinitialization(const std::string& local_dir,
         "src bucket %s or dest bucket %s",
         local_dbid.c_str(), src_bucket.c_str(), dest_bucket.c_str());
 
-    // This is an ephemeral clone. Resync all files from cloud.
+    // The local CLOUDMANIFEST on ephemeral clone is by definition out-of-sync
+    // with the CLOUDMANIFEST in the cloud. That means we need to make sure the
+    // local MANIFEST is compatible with the local CLOUDMANIFEST. Otherwise
+    // there is no way we can recover since all MANIFEST files on the cloud are
+    // only compatible with CLOUDMANIFEST on the cloud.
+    //
+    // If the local MANIFEST is not compatible with local CLOUDMANIFEST, we will
+    // need to reinitialize the entire directory.
+    std::unique_ptr<CloudManifest> cloud_manifest;
+    Env* base_env = GetBaseEnv();
+    Status load_status =
+        LoadLocalCloudManifest(local_dir, base_env, &cloud_manifest);
+    if (load_status.ok()) {
+      std::string current_epoch = cloud_manifest->GetCurrentEpoch().ToString();
+      Status local_manifest_exists =
+          base_env->FileExists(ManifestFileWithEpoch(local_dir, current_epoch));
+      if (!local_manifest_exists.ok()) {
+        Log(InfoLogLevel::WARN_LEVEL, info_log_,
+            "[cloud_env_impl] NeedsReinitialization: CLOUDMANIFEST exists "
+            "locally, but no local MANIFEST is compatible");
+        return Status::OK();
+      }
+    }
+
+    // Resync all files from cloud.
     // If the  resycn failed, then return success to indicate that
     // the local directory needs to be completely removed and recreated.
     st = ResyncDir(local_dir);
@@ -509,8 +543,8 @@ Status CloudEnvImpl::GetCloudDbid(const std::string& local_dir,
 
   // Read dbid from src bucket if it exists
   if (HasSrcBucket()) {
-    Status st = GetObject(GetSrcBucketName(), GetSrcObjectPath() + "/IDENTITY",
-                          tmpfile);
+    Status st = cloud_env_options.storage_provider->GetObject(
+        GetSrcBucketName(), GetSrcObjectPath() + "/IDENTITY", tmpfile);
     if (!st.ok() && !st.IsNotFound()) {
       return st;
     }
@@ -532,8 +566,8 @@ Status CloudEnvImpl::GetCloudDbid(const std::string& local_dir,
 
   // Read dbid from dest bucket if it exists
   if (HasDestBucket()) {
-    Status st = GetObject(GetDestBucketName(),
-                          GetDestObjectPath() + "/IDENTITY", tmpfile);
+    Status st = cloud_env_options.storage_provider->GetObject(
+        GetDestBucketName(), GetDestObjectPath() + "/IDENTITY", tmpfile);
     if (!st.ok() && !st.IsNotFound()) {
       return st;
     }
@@ -689,14 +723,11 @@ Status CloudEnvImpl::SanitizeDirectory(const DBOptions& options,
   // = -1
   if (!HasDestBucket()) {
     if (options.max_open_files != -1) {
-      Log(InfoLogLevel::ERROR_LEVEL, info_log_,
-          "[cloud_env_impl] SanitizeDirectory error.  "
-          " No destination bucket specified. Set options.max_open_files = -1 "
-          " to copy in all sst files from src bucket %s into local dir %s",
+      Log(InfoLogLevel::INFO_LEVEL, info_log_,
+          "[cloud_env_impl] SanitizeDirectory info.  "
+          " No destination bucket specified and options.max_open_files != -1 "
+          " so sst files from src bucket %s are not copied into local dir %s at startup",
           GetSrcObjectPath().c_str(), local_name.c_str());
-      return Status::InvalidArgument(
-          "No destination bucket. "
-          "Set options.max_open_files = -1");
     }
     if (!cloud_env_options.keep_local_sst_files && !read_only) {
       Log(InfoLogLevel::ERROR_LEVEL, info_log_,
@@ -760,8 +791,9 @@ Status CloudEnvImpl::SanitizeDirectory(const DBOptions& options,
   // Download IDENTITY, first try destination, then source
   if (HasDestBucket()) {
     // download IDENTITY from dest
-    st = GetObject(GetDestBucketName(), IdentityFileName(GetDestObjectPath()),
-                   IdentityFileName(local_name));
+    st = cloud_env_options.storage_provider->GetObject(
+        GetDestBucketName(), IdentityFileName(GetDestObjectPath()),
+        IdentityFileName(local_name));
     if (!st.ok() && !st.IsNotFound()) {
       // If there was an error and it's not IsNotFound() we need to bail
       return st;
@@ -770,8 +802,9 @@ Status CloudEnvImpl::SanitizeDirectory(const DBOptions& options,
   }
   if (!got_identity_from_dest && HasSrcBucket() && !SrcMatchesDest()) {
     // download IDENTITY from src
-    st = GetObject(GetSrcBucketName(), IdentityFileName(GetSrcObjectPath()),
-                   IdentityFileName(local_name));
+    st = cloud_env_options.storage_provider->GetObject(
+        GetSrcBucketName(), IdentityFileName(GetSrcObjectPath()),
+        IdentityFileName(local_name));
     if (!st.ok() && !st.IsNotFound()) {
       // If there was an error and it's not IsNotFound() we need to bail
       return st;
@@ -851,9 +884,9 @@ Status CloudEnvImpl::FetchCloudManifest(const std::string& local_dbname,
   }
   // first try to get cloudmanifest from dest
   if (HasDestBucket()) {
-    Status st =
-        GetObject(GetDestBucketName(), CloudManifestFile(GetDestObjectPath()),
-                  cloudmanifest);
+    Status st = cloud_env_options.storage_provider->GetObject(
+        GetDestBucketName(), CloudManifestFile(GetDestObjectPath()),
+        cloudmanifest);
     if (!st.ok() && !st.IsNotFound()) {
       // something went wrong, bail out
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
@@ -873,8 +906,9 @@ Status CloudEnvImpl::FetchCloudManifest(const std::string& local_dbname,
   }
   // we couldn't get cloud manifest from dest, need to try from src?
   if (HasSrcBucket() && !SrcMatchesDest()) {
-    Status st = GetObject(GetSrcBucketName(),
-                          CloudManifestFile(GetSrcObjectPath()), cloudmanifest);
+    Status st = cloud_env_options.storage_provider->GetObject(
+        GetSrcBucketName(), CloudManifestFile(GetSrcObjectPath()),
+        cloudmanifest);
     if (!st.ok() && !st.IsNotFound()) {
       // something went wrong, bail out
       Log(InfoLogLevel::INFO_LEVEL, info_log_,
@@ -949,16 +983,17 @@ Status CloudEnvImpl::RollNewEpoch(const std::string& local_dbname) {
     // upload new manifest, only if we have it (i.e. this is not a new
     // database, indicated by maxFileNumber)
     if (maxFileNumber > 0) {
-      st = PutObject(ManifestFileWithEpoch(local_dbname, newEpoch),
-                     GetDestBucketName(),
-                     ManifestFileWithEpoch(GetDestObjectPath(), newEpoch));
+      st = cloud_env_options.storage_provider->PutObject(
+          ManifestFileWithEpoch(local_dbname, newEpoch), GetDestBucketName(),
+          ManifestFileWithEpoch(GetDestObjectPath(), newEpoch));
       if (!st.ok()) {
         return st;
       }
     }
     // upload new cloud manifest
-    st = PutObject(CloudManifestFile(local_dbname), GetDestBucketName(),
-                   CloudManifestFile(GetDestObjectPath()));
+    st = cloud_env_options.storage_provider->PutObject(
+        CloudManifestFile(local_dbname), GetDestBucketName(),
+        CloudManifestFile(GetDestObjectPath()));
     if (!st.ok()) {
       return st;
     }
