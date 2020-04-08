@@ -65,7 +65,8 @@ Status CloudEnvImpl::LoadLocalCloudManifest(
   }
   return CloudManifest::LoadFromLog(
     std::unique_ptr<SequentialFileReader>(
-          new SequentialFileReader(NewLegacySequentialFileWrapper(file), cloud_manifest_file_name)),
+          new SequentialFileReader(NewLegacySequentialFileWrapper(file),
+                                   cloud_manifest_file_name)),
       cloud_manifest);
 }
 

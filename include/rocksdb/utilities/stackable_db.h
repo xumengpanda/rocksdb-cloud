@@ -456,6 +456,7 @@ class StackableDB : public DB {
     return db_->TryCatchUpWithPrimary();
   }
 #endif  // ROCKSDB_LITE
+
   virtual Status ExecuteRemoteCompactionRequest(
       const PluggableCompactionParam& inputParams,
       PluggableCompactionResult* result,
