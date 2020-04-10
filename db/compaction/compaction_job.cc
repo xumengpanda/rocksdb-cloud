@@ -1788,7 +1788,7 @@ void CompactionJob::RunRemote(PluggableCompactionService* service) {
 
   // Install all remotely compacted file into local files.
   auto statuses =
-      service->InstallFiles(sources, destinations, env_options_, env_);
+      service->InstallFiles(sources, destinations, file_options_, env_);
   compaction_stats_.micros = env_->NowMicros() - start_micros;
 
   for (uint32_t i = 0; i < statuses.size(); ++i) {
