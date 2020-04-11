@@ -497,6 +497,9 @@ bool LevelCompactionBuilder::PickFileToCompact() {
       continue;
     }
 
+    ROCKS_LOG_INFO(ioptions_.info_log, "start_level_inputs_ size: %lu",
+                   start_level_inputs_.size());
+
     // Now that input level is fully expanded, we check whether any output files
     // are locked due to pending compaction.
     //

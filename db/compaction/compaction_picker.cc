@@ -241,16 +241,26 @@ bool CompactionPicker::ExpandInputsToCleanCut(const std::string& /*cf_name*/,
   size_t old_size;
   do {
     old_size = inputs->size();
+    ROCKS_LOG_INFO(ioptions_.info_log, "Old size: %lu\n", old_size);
     GetRange(*inputs, &smallest, &largest);
+    ROCKS_LOG_INFO(ioptions_.info_log, "Smallest %s, Largest: %s",
+                   smallest.rep()->c_str(), largest.rep()->c_str());
     inputs->clear();
     vstorage->GetOverlappingInputs(level, &smallest, &largest, &inputs->files,
                                    hint_index, &hint_index, true,
                                    next_smallest);
+    ROCKS_LOG_INFO(ioptions_.info_log, "Current file list:");
+    for (const auto& f : inputs->files) {
+      ROCKS_LOG_INFO(ioptions_.info_log, "File id: %lu",
+                     f->fd.packed_number_and_path_id);
+    }
   } while (inputs->size() > old_size);
 
   // we started off with inputs non-empty and the previous loop only grew
   // inputs. thus, inputs should be non-empty here
   assert(!inputs->empty());
+  ROCKS_LOG_INFO(ioptions_.info_log, "AFTER EXPANDING, size of inputs: %lu\n",
+                 inputs->size());
 
   // If, after the expansion, there are files that are already under
   // compaction, then we must drop/cancel this compaction.

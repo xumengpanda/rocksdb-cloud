@@ -2825,6 +2825,7 @@ void VersionStorageInfo::GetOverlappingInputs(
     std::vector<FileMetaData*>* inputs, int hint_index, int* file_index,
     bool expand_range, InternalKey** next_smallest) const {
   if (level >= num_non_empty_levels_) {
+    fprintf(stderr, "break 1\n");
     // this level is empty, no overlapping inputs
     return;
   }
@@ -2837,6 +2838,7 @@ void VersionStorageInfo::GetOverlappingInputs(
   if (level > 0) {
     GetOverlappingInputsRangeBinarySearch(level, begin, end, inputs, hint_index,
                                           file_index, false, next_smallest);
+    fprintf(stderr, "break 2\n");
     return;
   }
 
@@ -2946,6 +2948,14 @@ void VersionStorageInfo::GetOverlappingInputsRangeBinarySearch(
   const FdWithKeyRange* files = level_files_brief_[level].files;
   const int num_files = static_cast<int>(level_files_brief_[level].num_files);
 
+  for (int i = 0; i < num_files; ++i) {
+    auto f = files[i];
+    fprintf(stderr, "File %lu, smallest %s, largest %s\n",
+            f.file_metadata->fd.packed_number_and_path_id,
+            f.file_metadata->smallest.DebugString(true).c_str(),
+            f.file_metadata->largest.DebugString(true).c_str());
+  }
+
   // begin to use binary search to find lower bound
   // and upper bound.
   int start_index = 0;
@@ -3005,6 +3015,7 @@ void VersionStorageInfo::GetOverlappingInputsRangeBinarySearch(
   }
 
   assert(start_index <= end_index);
+  fprintf(stderr, "Start idx: %d, end idx: %d\n", start_index, end_index);
 
   // If there were no overlapping files, return immediately.
   if (start_index == end_index) {
