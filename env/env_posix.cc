@@ -124,25 +124,67 @@ class PosixDynamicLibrary : public DynamicLibrary {
   std::string name_;
   void* handle_;
 };
+
+// The set of libraries already loaded.  We need to keep these libraries
+// around because if one was loaded, some object created out of it, and then
+// the library was unloaded, bad things can happen
+static std::unordered_map<std::string, std::shared_ptr<DynamicLibrary> >
+    loaded_libraries;
+
+static bool OpenPosixLibrary(const std::string& name,
+                             std::shared_ptr<DynamicLibrary>* result) {
+  void* hndl = nullptr;
+  auto iter = loaded_libraries.find(name);
+  if (iter != loaded_libraries.end()) {
+    *result = iter->second;
+    return true;
+  } else if (name.empty()) {
+    hndl = dlopen(NULL, RTLD_NOW);
+  } else {
+    hndl = dlopen(name.c_str(), RTLD_NOW);
+  }
+  if (hndl != nullptr) {
+    result->reset(new PosixDynamicLibrary(name, hndl));
+    loaded_libraries[name] = *result;
+    return true;
+  } else {
+    return false;
+  }
+}
+
 #endif  // !ROCKSDB_NO_DYNAMIC_EXTENSION
 
 class PosixEnv : public CompositeEnvWrapper {
  public:
-  PosixEnv();
+  // This constructor is for constructing non-default Envs, mainly by
+  // NewCompositeEnv(). It allows new instances to share the same
+  // threadpool and other resources as the default Env, while allowing
+  // a non-default FileSystem implementation
+  PosixEnv(const PosixEnv* default_env, std::shared_ptr<FileSystem> fs);
 
   ~PosixEnv() override {
-    for (const auto tid : threads_to_join_) {
-      pthread_join(tid, nullptr);
+    if (this == Env::Default()) {
+      for (const auto tid : threads_to_join_) {
+        pthread_join(tid, nullptr);
+      }
+      for (int pool_id = 0; pool_id < Env::Priority::TOTAL; ++pool_id) {
+        thread_pools_[pool_id].JoinAllThreads();
+      }
+      // Do not delete the thread_status_updater_ in order to avoid the
+      // free after use when Env::Default() is destructed while some other
+      // child threads are still trying to update thread status. All
+      // PosixEnv instances use the same thread_status_updater_, so never
+      // explicitly delete it.
     }
-    for (int pool_id = 0; pool_id < Env::Priority::TOTAL; ++pool_id) {
-      thread_pools_[pool_id].JoinAllThreads();
-    }
-    // Delete the thread_status_updater_ only when the current Env is not
-    // Env::Default().  This is to avoid the free-after-use error when
-    // Env::Default() is destructed while some other child threads are
-    // still trying to update thread status.
-    if (this != Env::Default()) {
-      delete thread_status_updater_;
+  }
+
+  const char* Name() const override { return "Posix"; }
+  // Finds the named Customizable in the stack, or nullptr if not found
+  const Customizable* FindInstance(const std::string& name) const override {
+    if (name == "Default" || name == "Posix") {
+      return this;
+    } else {
+      return Env::FindInstance(name);
     }
   }
 
@@ -165,14 +207,8 @@ class PosixEnv : public CompositeEnvWrapper {
                      std::shared_ptr<DynamicLibrary>* result) override {
     Status status;
     assert(result != nullptr);
-    if (name.empty()) {
-      void* hndl = dlopen(NULL, RTLD_NOW);
-      if (hndl != nullptr) {
-        result->reset(new PosixDynamicLibrary(name, hndl));
-        return Status::OK();
-      }
-    } else {
-      std::string library_name = name;
+    std::string library_name = name;
+    if (!library_name.empty()) {
       if (library_name.find(kSharedLibExt) == std::string::npos) {
         library_name = library_name + kSharedLibExt;
       }
@@ -182,29 +218,28 @@ class PosixEnv : public CompositeEnvWrapper {
         library_name = "lib" + library_name;
       }
 #endif
-      if (path.empty()) {
-        void* hndl = dlopen(library_name.c_str(), RTLD_NOW);
-        if (hndl != nullptr) {
-          result->reset(new PosixDynamicLibrary(library_name, hndl));
-          return Status::OK();
-        }
-      } else {
-        std::string local_path;
-        std::stringstream ss(path);
-        while (getline(ss, local_path, kPathSeparator)) {
-          if (!path.empty()) {
-            std::string full_name = local_path + "/" + library_name;
-            void* hndl = dlopen(full_name.c_str(), RTLD_NOW);
-            if (hndl != nullptr) {
-              result->reset(new PosixDynamicLibrary(full_name, hndl));
-              return Status::OK();
-            }
+    }
+    // If there is no path or no library name
+    // Or if the library name already has a path in it...
+    if (path.empty() || library_name.empty() ||
+        library_name.find("/") != std::string::npos) {
+      if (OpenPosixLibrary(library_name, result)) {
+        return Status::OK();
+      }
+    } else {
+      std::string local_path;
+      std::stringstream ss(path);
+      while (getline(ss, local_path, kPathSeparator)) {
+        if (!local_path.empty()) {
+          std::string full_name = local_path + "/" + library_name;
+          if (OpenPosixLibrary(full_name, result)) {
+            return Status::OK();
           }
         }
       }
     }
-    return Status::IOError(
-        IOErrorMsg("Failed to open shared library: xs", name), dlerror());
+    return Status::IOError(IOErrorMsg("Failed to open shared library: ", name),
+                           dlerror());
   }
 #endif  // !ROCKSDB_NO_DYNAMIC_EXTENSION
 
@@ -251,34 +286,6 @@ class PosixEnv : public CompositeEnvWrapper {
   }
 
   uint64_t GetThreadID() const override { return gettid(pthread_self()); }
-
-  Status NewLogger(const std::string& fname,
-                   std::shared_ptr<Logger>* result) override {
-    FILE* f;
-    {
-      IOSTATS_TIMER_GUARD(open_nanos);
-      f = fopen(fname.c_str(),
-                "w"
-#ifdef __GLIBC_PREREQ
-#if __GLIBC_PREREQ(2, 7)
-                "e"  // glibc extension to enable O_CLOEXEC
-#endif
-#endif
-      );
-    }
-    if (f == nullptr) {
-      result->reset();
-      return IOError("when fopen a file for new logger", fname, errno);
-    } else {
-      int fd = fileno(f);
-#ifdef ROCKSDB_FALLOCATE_PRESENT
-      fallocate(fd, FALLOC_FL_KEEP_SIZE, 0, 4 * 1024);
-#endif
-      SetFD_CLOEXEC(fd, nullptr);
-      result->reset(new PosixLogger(f, &PosixEnv::gettid, this));
-      return Status::OK();
-    }
-  }
 
   uint64_t NowMicros() override {
     struct timeval tv;
@@ -406,18 +413,34 @@ class PosixEnv : public CompositeEnvWrapper {
   }
 
  private:
-  std::vector<ThreadPoolImpl> thread_pools_;
-  pthread_mutex_t mu_;
-  std::vector<pthread_t> threads_to_join_;
+  friend Env* Env::Default();
+  // Constructs the default Env, a singleton
+  PosixEnv();
+
+  // The below 4 members are only used by the default PosixEnv instance.
+  // Non-default instances simply maintain references to the backing
+  // members in te default instance
+  std::vector<ThreadPoolImpl> thread_pools_storage_;
+  pthread_mutex_t mu_storage_;
+  std::vector<pthread_t> threads_to_join_storage_;
+  bool allow_non_owner_access_storage_;
+
+  std::vector<ThreadPoolImpl>& thread_pools_;
+  pthread_mutex_t& mu_;
+  std::vector<pthread_t>& threads_to_join_;
   // If true, allow non owner read access for db files. Otherwise, non-owner
   //  has no access to db files.
-  bool allow_non_owner_access_;
+  bool& allow_non_owner_access_;
 };
 
 PosixEnv::PosixEnv()
-    : CompositeEnvWrapper(this, FileSystem::Default().get()),
-      thread_pools_(Priority::TOTAL),
-      allow_non_owner_access_(true) {
+    : CompositeEnvWrapper(this, FileSystem::Default()),
+      thread_pools_storage_(Priority::TOTAL),
+      allow_non_owner_access_storage_(true),
+      thread_pools_(thread_pools_storage_),
+      mu_(mu_storage_),
+      threads_to_join_(threads_to_join_storage_),
+      allow_non_owner_access_(allow_non_owner_access_storage_) {
   ThreadPoolImpl::PthreadCall("mutex_init", pthread_mutex_init(&mu_, nullptr));
   for (int pool_id = 0; pool_id < Env::Priority::TOTAL; ++pool_id) {
     thread_pools_[pool_id].SetThreadPriority(
@@ -426,6 +449,15 @@ PosixEnv::PosixEnv()
     thread_pools_[pool_id].SetHostEnv(this);
   }
   thread_status_updater_ = CreateThreadStatusUpdater();
+}
+
+PosixEnv::PosixEnv(const PosixEnv* default_env, std::shared_ptr<FileSystem> fs)
+  : CompositeEnvWrapper(this, fs),
+    thread_pools_(default_env->thread_pools_),
+    mu_(default_env->mu_),
+    threads_to_join_(default_env->threads_to_join_),
+    allow_non_owner_access_(default_env->allow_non_owner_access_) {
+  thread_status_updater_ = default_env->thread_status_updater_;
 }
 
 void PosixEnv::Schedule(void (*function)(void* arg1), void* arg, Priority pri,
@@ -519,9 +551,12 @@ Env* Env::Default() {
   CompressionContextCache::InitSingleton();
   INIT_SYNC_POINT_SINGLETONS();
   static PosixEnv default_env;
-  static CompositeEnvWrapper composite_env(&default_env,
-                                           FileSystem::Default().get());
-  return &composite_env;
+  return &default_env;
+}
+
+std::unique_ptr<Env> NewCompositeEnv(std::shared_ptr<FileSystem> fs) {
+  PosixEnv* default_env = static_cast<PosixEnv*>(Env::Default());
+  return std::unique_ptr<Env>(new PosixEnv(default_env, fs));
 }
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+
 #include <atomic>
 #include <cinttypes>
 #include <condition_variable>
@@ -39,6 +40,7 @@
 #include "port/port.h"
 #include "port/stack_trace.h"
 #include "rocksdb/cache.h"
+#include "rocksdb/convenience.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/filter_policy.h"
@@ -73,6 +75,10 @@
 #include "utilities/merge_operators/bytesxor.h"
 #include "utilities/merge_operators/sortlist.h"
 #include "utilities/persistent_cache/block_cache_tier.h"
+
+#ifdef MEMKIND
+#include "memory/memkind_kmem_allocator.h"
+#endif
 
 #ifdef OS_WIN
 #include <io.h>  // open/close
@@ -453,10 +459,20 @@ DEFINE_int64(simcache_size, -1,
 DEFINE_bool(cache_index_and_filter_blocks, false,
             "Cache index/filter blocks in block cache.");
 
+DEFINE_bool(use_cache_memkind_kmem_allocator, false,
+            "Use memkind kmem allocator for block cache.");
+
 DEFINE_bool(partition_index_and_filters, false,
             "Partition index and filter blocks.");
 
 DEFINE_bool(partition_index, false, "Partition index blocks");
+
+DEFINE_bool(index_with_first_key, false, "Include first key in the index");
+
+DEFINE_int64(
+    index_shortening_mode, 2,
+    "mode to shorten index: 0 for no shortening; 1 for only shortening "
+    "separaters; 2 for shortening shortening and successor");
 
 DEFINE_int64(metadata_block_size,
              ROCKSDB_NAMESPACE::BlockBasedTableOptions().metadata_block_size,
@@ -913,6 +929,9 @@ DEFINE_int32(min_level_to_compress, -1, "If non-negative, compression starts"
              " not compressed. Otherwise, apply compression_type to "
              "all levels.");
 
+DEFINE_int32(compression_threads, 1,
+             "Number of concurrent compression threads to run.");
+
 static bool ValidateTableCacheNumshardbits(const char* flagname,
                                            int32_t value) {
   if (0 >= value || value > 20) {
@@ -990,8 +1009,10 @@ DEFINE_uint64(delayed_write_rate, 8388608u,
 DEFINE_bool(enable_pipelined_write, true,
             "Allow WAL and memtable writes to be pipelined");
 
-DEFINE_bool(unordered_write, false,
-            "Allow WAL and memtable writes to be pipelined");
+DEFINE_bool(
+    unordered_write, false,
+    "Enable the unordered write feature, which provides higher throughput but "
+    "relaxes the guarantees around atomic reads and immutable snapshots");
 
 DEFINE_bool(allow_concurrent_memtable_write, true,
             "Allow multi-writers to update mem tables in parallel.");
@@ -1067,7 +1088,7 @@ DEFINE_double(keyrange_dist_d, 0.0,
               "f(x)=a*exp(b*x)+c*exp(d*x)");
 DEFINE_int64(keyrange_num, 1,
              "The number of key ranges that are in the same prefix "
-             "group, each prefix range will have its key acccess "
+             "group, each prefix range will have its key access "
              "distribution");
 DEFINE_double(key_dist_a, 0.0,
               "The parameter 'a' of key access distribution model "
@@ -1383,6 +1404,8 @@ class ReportFileOpEnv : public EnvWrapper {
  public:
   explicit ReportFileOpEnv(Env* base) : EnvWrapper(base) { reset(); }
 
+  const char* Name() const override { return "ReportFileOpEnv"; }
+
   void reset() {
     counters_.open_counter_ = 0;
     counters_.read_counter_ = 0;
@@ -1520,9 +1543,8 @@ static enum DistributionType StringToDistributionType(const char* ctype) {
 
 class BaseDistribution {
  public:
-  BaseDistribution(unsigned int min, unsigned int max) :
-    min_value_size_(min),
-    max_value_size_(max) {}
+  BaseDistribution(unsigned int _min, unsigned int _max)
+      : min_value_size_(_min), max_value_size_(_max) {}
   virtual ~BaseDistribution() {}
 
   unsigned int Generate() {
@@ -1561,12 +1583,14 @@ class FixedDistribution : public BaseDistribution
 class NormalDistribution
     : public BaseDistribution, public std::normal_distribution<double> {
  public:
-  NormalDistribution(unsigned int min, unsigned int max) :
-    BaseDistribution(min, max),
-    // 99.7% values within the range [min, max].
-    std::normal_distribution<double>((double)(min + max) / 2.0 /*mean*/,
-                                     (double)(max - min) / 6.0 /*stddev*/),
-    gen_(rd_()) {}
+  NormalDistribution(unsigned int _min, unsigned int _max)
+      : BaseDistribution(_min, _max),
+        // 99.7% values within the range [min, max].
+        std::normal_distribution<double>(
+            (double)(_min + _max) / 2.0 /*mean*/,
+            (double)(_max - _min) / 6.0 /*stddev*/),
+        gen_(rd_()) {}
+
  private:
   virtual unsigned int Get() override {
     return static_cast<unsigned int>((*this)(gen_));
@@ -1579,10 +1603,11 @@ class UniformDistribution
     : public BaseDistribution,
       public std::uniform_int_distribution<unsigned int> {
  public:
-  UniformDistribution(unsigned int min, unsigned int max) :
-    BaseDistribution(min, max),
-    std::uniform_int_distribution<unsigned int>(min, max),
-    gen_(rd_()) {}
+  UniformDistribution(unsigned int _min, unsigned int _max)
+      : BaseDistribution(_min, _max),
+        std::uniform_int_distribution<unsigned int>(_min, _max),
+        gen_(rd_()) {}
+
  private:
   virtual unsigned int Get() override {
     return (*this)(gen_);
@@ -2662,9 +2687,22 @@ class Benchmark {
       }
       return cache;
     } else {
-      return NewLRUCache(
-          static_cast<size_t>(capacity), FLAGS_cache_numshardbits,
-          false /*strict_capacity_limit*/, FLAGS_cache_high_pri_pool_ratio);
+      if (FLAGS_use_cache_memkind_kmem_allocator) {
+#ifdef MEMKIND
+        return NewLRUCache(
+            static_cast<size_t>(capacity), FLAGS_cache_numshardbits,
+            false /*strict_capacity_limit*/, FLAGS_cache_high_pri_pool_ratio,
+            std::make_shared<MemkindKmemAllocator>());
+
+#else
+        fprintf(stderr, "Memkind library is not linked with the binary.");
+        exit(1);
+#endif
+      } else {
+        return NewLRUCache(
+            static_cast<size_t>(capacity), FLAGS_cache_numshardbits,
+            false /*strict_capacity_limit*/, FLAGS_cache_high_pri_pool_ratio);
+      }
     }
   }
 
@@ -3790,6 +3828,11 @@ class Benchmark {
         block_based_options.index_type = BlockBasedTableOptions::kBinarySearch;
       }
       if (FLAGS_partition_index_and_filters || FLAGS_partition_index) {
+        if (FLAGS_index_with_first_key) {
+          fprintf(stderr,
+                  "--index_with_first_key is not compatible with"
+                  " partition index.");
+        }
         if (FLAGS_use_hash_search) {
           fprintf(stderr,
                   "use_hash_search is incompatible with "
@@ -3801,7 +3844,29 @@ class Benchmark {
         if (FLAGS_partition_index_and_filters) {
           block_based_options.partition_filters = true;
         }
+      } else if (FLAGS_index_with_first_key) {
+        block_based_options.index_type =
+            BlockBasedTableOptions::kBinarySearchWithFirstKey;
       }
+      BlockBasedTableOptions::IndexShorteningMode index_shortening =
+          block_based_options.index_shortening;
+      switch (FLAGS_index_shortening_mode) {
+        case 0:
+          index_shortening =
+              BlockBasedTableOptions::IndexShorteningMode::kNoShortening;
+          break;
+        case 1:
+          index_shortening =
+              BlockBasedTableOptions::IndexShorteningMode::kShortenSeparators;
+          break;
+        case 2:
+          index_shortening = BlockBasedTableOptions::IndexShorteningMode::
+              kShortenSeparatorsAndSuccessor;
+          break;
+        default:
+          fprintf(stderr, "Unknown key shortening mode\n");
+      }
+      block_based_options.index_shortening = index_shortening;
       if (cache_ == nullptr) {
         block_based_options.no_block_cache = true;
       }
@@ -4015,12 +4080,12 @@ class Benchmark {
     options.compression_opts.max_dict_bytes = FLAGS_compression_max_dict_bytes;
     options.compression_opts.zstd_max_train_bytes =
         FLAGS_compression_zstd_max_train_bytes;
+    options.compression_opts.parallel_threads = FLAGS_compression_threads;
     // If this is a block based table, set some related options
-    if (options.table_factory->Name() == BlockBasedTableFactory::kName &&
-        options.table_factory->GetOptions() != nullptr) {
-      BlockBasedTableOptions* table_options =
-          reinterpret_cast<BlockBasedTableOptions*>(
-              options.table_factory->GetOptions());
+    auto table_options =
+        options.table_factory->GetOptions<BlockBasedTableOptions>(
+            TableFactory::kBlockBasedTableOpts);
+    if (table_options != nullptr) {
       if (FLAGS_cache_size) {
         table_options->block_cache = cache_;
       }
@@ -4296,9 +4361,8 @@ class Benchmark {
         for (uint64_t i = 0; i < num_; ++i) {
           values_[i] = i;
         }
-        std::shuffle(
-            values_.begin(), values_.end(),
-            std::default_random_engine(static_cast<unsigned int>(FLAGS_seed)));
+        RandomShuffle(values_.begin(), values_.end(),
+                      static_cast<uint32_t>(FLAGS_seed));
       }
     }
 
@@ -5043,7 +5107,7 @@ class Benchmark {
     int64_t found = 0;
     int64_t bytes = 0;
     int num_keys = 0;
-    int64_t key_rand = GetRandomKey(&thread->rand);
+    int64_t key_rand = 0;
     ReadOptions options(FLAGS_verify_checksum, true);
     std::unique_ptr<const char[]> key_guard;
     Slice key = AllocateKey(&key_guard);
@@ -5055,7 +5119,6 @@ class Benchmark {
       // We use same key_rand as seed for key and column family so that we can
       // deterministically find the cfh corresponding to a particular key, as it
       // is done in DoWrite method.
-      GenerateKeyFromInt(key_rand, FLAGS_num, &key);
       if (entries_per_batch_ > 1 && FLAGS_multiread_stride) {
         if (++num_keys == entries_per_batch_) {
           num_keys = 0;
@@ -5070,6 +5133,7 @@ class Benchmark {
       } else {
         key_rand = GetRandomKey(&thread->rand);
       }
+      GenerateKeyFromInt(key_rand, FLAGS_num, &key);
       read++;
       Status s;
       if (FLAGS_num_column_families > 1) {
@@ -7012,7 +7076,9 @@ int db_bench_tool(int argc, char** argv) {
     fprintf(stderr, "Cannot provide both --hdfs and --env_uri.\n");
     exit(1);
   } else if (!FLAGS_env_uri.empty()) {
-    Status s = Env::LoadEnv(FLAGS_env_uri, &FLAGS_env, &env_guard);
+    ConfigOptions config_options;
+    Status s = Env::CreateFromString(config_options, FLAGS_env_uri, &FLAGS_env,
+                                     &env_guard);
     if (FLAGS_env == nullptr) {
       fprintf(stderr, "No Env registered for URI: %s\n", FLAGS_env_uri.c_str());
       exit(1);

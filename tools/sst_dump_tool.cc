@@ -6,8 +6,6 @@
 //
 #ifndef ROCKSDB_LITE
 
-#include "tools/sst_dump_tool_imp.h"
-
 #include <cinttypes>
 #include <iostream>
 #include <map>
@@ -15,11 +13,13 @@
 #include <sstream>
 #include <vector>
 
-#include "db/blob_index.h"
+#include "db/blob/blob_index.h"
 #include "db/memtable.h"
 #include "db/write_batch_internal.h"
 #include "env/composite_env_wrapper.h"
 #include "options/cf_options.h"
+#include "port/port.h"
+#include "rocksdb/convenience.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/iterator.h"
@@ -35,10 +35,9 @@
 #include "table/meta_blocks.h"
 #include "table/plain/plain_table_factory.h"
 #include "table/table_reader.h"
+#include "tools/sst_dump_tool_imp.h"
 #include "util/compression.h"
 #include "util/random.h"
-
-#include "port/port.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -131,20 +130,22 @@ Status SstFileDumper::NewTableReader(
     const ImmutableCFOptions& /*ioptions*/, const EnvOptions& /*soptions*/,
     const InternalKeyComparator& /*internal_comparator*/, uint64_t file_size,
     std::unique_ptr<TableReader>* /*table_reader*/) {
+  auto t_opt = TableReaderOptions(ioptions_, moptions_.prefix_extractor.get(),
+                                  soptions_, internal_comparator_);
+  // Allow open file with global sequence number for backward compatibility.
+  t_opt.largest_seqno = kMaxSequenceNumber;
+
   // We need to turn off pre-fetching of index and filter nodes for
   // BlockBasedTable
-  if (BlockBasedTableFactory::kName == options_.table_factory->Name()) {
-    return options_.table_factory->NewTableReader(
-        TableReaderOptions(ioptions_, moptions_.prefix_extractor.get(),
-                           soptions_, internal_comparator_),
-        std::move(file_), file_size, &table_reader_, /*enable_prefetch=*/false);
+  if (TableFactory::kBlockBasedTableName == options_.table_factory->Name()) {
+    return options_.table_factory->NewTableReader(t_opt, std::move(file_),
+                                                  file_size, &table_reader_,
+                                                  /*enable_prefetch=*/false);
   }
 
   // For all other factory implementation
-  return options_.table_factory->NewTableReader(
-      TableReaderOptions(ioptions_, moptions_.prefix_extractor.get(), soptions_,
-                         internal_comparator_),
-      std::move(file_), file_size, &table_reader_);
+  return options_.table_factory->NewTableReader(t_opt, std::move(file_),
+                                                file_size, &table_reader_);
 }
 
 Status SstFileDumper::VerifyChecksum() {
@@ -184,11 +185,11 @@ uint64_t SstFileDumper::CalculateCompressedTableSize(
       ReadOptions(), moptions_.prefix_extractor.get(), /*arena=*/nullptr,
       /*skip_filters=*/false, TableReaderCaller::kSSTDumpTool));
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-    if (!iter->status().ok()) {
-      fputs(iter->status().ToString().c_str(), stderr);
-      exit(1);
-    }
     table_builder->Add(iter->key(), iter->value());
+  }
+  if (!iter->status().ok()) {
+    fputs(iter->status().ToString().c_str(), stderr);
+    exit(1);
   }
   Status s = table_builder->Finish();
   if (!s.ok()) {
@@ -626,8 +627,9 @@ int SSTDumpTool::Run(int argc, char** argv, Options options) {
   // Otherwise, the caller is responsible for creating custom env.
   if (!options.env || options.env == ROCKSDB_NAMESPACE::Env::Default()) {
     Env* env = Env::Default();
-    Status s = Env::LoadEnv(env_uri ? env_uri : "", &env, &env_guard);
-    if (!s.ok() && !s.IsNotFound()) {
+    Status s = Env::CreateFromString(ConfigOptions(), env_uri ? env_uri : "",
+                                     &env, &env_guard);
+    if (!s.ok() && !s.IsNotSupported()) {
       fprintf(stderr, "LoadEnv: %s\n", s.ToString().c_str());
       exit(1);
     }

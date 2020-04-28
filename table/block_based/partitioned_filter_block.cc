@@ -194,8 +194,9 @@ BlockHandle PartitionedFilterBlockReader::GetFilterPartitionHandle(
   const InternalKeyComparator* const comparator = internal_comparator();
   Statistics* kNullStats = nullptr;
   filter_block.GetValue()->NewIndexIterator(
-      comparator, comparator->user_comparator(), &iter, kNullStats,
-      true /* total_order_seek */, false /* have_first_key */,
+      comparator, comparator->user_comparator(),
+      table()->get_rep()->get_global_seqno(BlockType::kFilter), &iter,
+      kNullStats, true /* total_order_seek */, false /* have_first_key */,
       index_key_includes_seq(), index_value_is_full());
   iter.Seek(entry);
   if (UNLIKELY(!iter.Valid())) {
@@ -253,6 +254,7 @@ bool PartitionedFilterBlockReader::MayMatch(
   Status s =
       GetOrReadFilterBlock(no_io, get_context, lookup_context, &filter_block);
   if (UNLIKELY(!s.ok())) {
+    TEST_SYNC_POINT("FilterReadError");
     return true;
   }
 
@@ -270,6 +272,7 @@ bool PartitionedFilterBlockReader::MayMatch(
                               no_io, get_context, lookup_context,
                               &filter_partition_block);
   if (UNLIKELY(!s.ok())) {
+    TEST_SYNC_POINT("FilterReadError");
     return true;
   }
 
@@ -309,6 +312,7 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
                    "Error retrieving top-level filter block while trying to "
                    "cache filter partitions: %s",
                    s.ToString().c_str());
+    TEST_SYNC_POINT("FilterReadError");
     return;
   }
 
@@ -319,7 +323,8 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
   const InternalKeyComparator* const comparator = internal_comparator();
   Statistics* kNullStats = nullptr;
   filter_block.GetValue()->NewIndexIterator(
-      comparator, comparator->user_comparator(), &biter, kNullStats,
+      comparator, comparator->user_comparator(),
+      rep->get_global_seqno(BlockType::kFilter), &biter, kNullStats,
       true /* total_order_seek */, false /* have_first_key */,
       index_key_includes_seq(), index_value_is_full());
   // Index partitions are assumed to be consecuitive. Prefetch them all.
@@ -338,6 +343,11 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
   prefetch_buffer.reset(new FilePrefetchBuffer());
   s = prefetch_buffer->Prefetch(rep->file.get(), prefetch_off,
                                 static_cast<size_t>(prefetch_len));
+#ifndef NDEBUG
+  if (!s.ok()) {
+    TEST_SYNC_POINT("FilterReadError");
+  }
+#endif
 
   // After prefetch, read the partitions one by one
   ReadOptions read_options;
@@ -360,6 +370,11 @@ void PartitionedFilterBlockReader::CacheDependencies(bool pin) {
         }
       }
     }
+#ifndef NDEBUG
+    if (!s.ok()) {
+      TEST_SYNC_POINT("FilterReadError");
+    }
+#endif
   }
 }
 

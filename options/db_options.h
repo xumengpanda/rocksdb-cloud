@@ -11,6 +11,7 @@
 #include "rocksdb/options.h"
 
 namespace ROCKSDB_NAMESPACE {
+class ObjectRegistry;
 
 struct ImmutableDBOptions {
   ImmutableDBOptions();
@@ -35,7 +36,6 @@ struct ImmutableDBOptions {
   std::string db_log_dir;
   std::string wal_dir;
   uint32_t max_subcompactions;
-  int max_background_flushes;
   size_t max_log_file_size;
   size_t log_file_time_to_roll;
   size_t keep_log_file_num;
@@ -60,6 +60,7 @@ struct ImmutableDBOptions {
   size_t random_access_max_buffer_size;
   bool use_adaptive_mutex;
   std::vector<std::shared_ptr<EventListener>> listeners;
+  std::vector<std::shared_ptr<DBPlugin>> plugins;
   bool enable_thread_tracking;
   bool enable_pipelined_write;
   bool unordered_write;
@@ -74,6 +75,7 @@ struct ImmutableDBOptions {
   std::shared_ptr<Cache> row_cache;
 #ifndef ROCKSDB_LITE
   WalFilter* wal_filter;
+  std::shared_ptr<ObjectRegistry> object_registry;
 #endif  // ROCKSDB_LITE
   bool fail_if_options_file_error;
   bool dump_malloc_stats;
@@ -87,7 +89,8 @@ struct ImmutableDBOptions {
   bool persist_stats_to_disk;
   bool write_dbid_to_manifest;
   size_t log_readahead_size;
-  std::shared_ptr<FileChecksumFunc> sst_file_checksum_func;
+  std::shared_ptr<FileChecksumGenFactory> file_checksum_gen_factory;
+  bool best_efforts_recovery;
 };
 
 struct MutableDBOptions {
@@ -113,6 +116,7 @@ struct MutableDBOptions {
   uint64_t wal_bytes_per_sync;
   bool strict_bytes_per_sync;
   size_t compaction_readahead_size;
+  int max_background_flushes;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

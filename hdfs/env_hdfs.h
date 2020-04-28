@@ -54,6 +54,8 @@ class HdfsEnv : public Env {
     hdfsDisconnect(fileSys_);
   }
 
+  const char* Name() const override { return "HDFSEnv"; }
+
   Status NewSequentialFile(const std::string& fname,
                            std::unique_ptr<SequentialFile>* result,
                            const EnvOptions& options) override;
@@ -100,6 +102,8 @@ class HdfsEnv : public Env {
 
   Status NewLogger(const std::string& fname,
                    std::shared_ptr<Logger>* result) override;
+
+  Status IsDirectory(const std::string& path, bool* is_dir) override;
 
   void Schedule(void (*function)(void* arg), void* arg, Priority pri = LOW,
                 void* tag = nullptr,
@@ -250,6 +254,8 @@ class HdfsEnv : public Env {
   virtual ~HdfsEnv() {
   }
 
+  const char* Name() const override { return "HDFSEnv"; }
+
   virtual Status NewSequentialFile(const std::string& fname,
                                    std::unique_ptr<SequentialFile>* result,
                                    const EnvOptions& options) override;
@@ -326,6 +332,10 @@ class HdfsEnv : public Env {
 
   virtual Status NewLogger(const std::string& /*fname*/,
                            std::shared_ptr<Logger>* /*result*/) override {
+    return notsup;
+  }
+
+  Status IsDirectory(const std::string& /*path*/, bool* /*is_dir*/) override {
     return notsup;
   }
 

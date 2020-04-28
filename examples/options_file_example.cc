@@ -79,15 +79,18 @@ int main() {
   // Load the options file.
   DBOptions loaded_db_opt;
   std::vector<ColumnFamilyDescriptor> loaded_cf_descs;
-  s = LoadLatestOptions(kDBPath, Env::Default(), &loaded_db_opt,
+  ConfigOptions config_options;
+  s = LoadLatestOptions(config_options, kDBPath, &loaded_db_opt,
                         &loaded_cf_descs);
   assert(s.ok());
   assert(loaded_db_opt.create_if_missing == db_opt.create_if_missing);
 
   // Initialize pointer options for each column family
   for (size_t i = 0; i < loaded_cf_descs.size(); ++i) {
-    auto* loaded_bbt_opt = reinterpret_cast<BlockBasedTableOptions*>(
-        loaded_cf_descs[0].options.table_factory->GetOptions());
+    auto* loaded_bbt_opt =
+        loaded_cf_descs[0]
+            .options.table_factory->GetOptions<BlockBasedTableOptions>(
+                TableFactory::kBlockBasedTableOpts);
     // Expect the same as BlockBasedTableOptions will be loaded form file.
     assert(loaded_bbt_opt->block_size == bbt_opts.block_size);
     // However, block_cache needs to be manually initialized as documented

@@ -102,6 +102,11 @@ struct FileOptions : EnvOptions {
 
   FileOptions(const EnvOptions& opts)
     : EnvOptions(opts) {}
+
+  FileOptions(const FileOptions& opts)
+    : EnvOptions(opts), io_options(opts.io_options) {}
+
+  FileOptions& operator=(const FileOptions& opts) = default;
 };
 
 // A structure to pass back some debugging information from the FileSystem
@@ -161,8 +166,17 @@ class FileSystem {
   static const char* Type() { return "FileSystem"; }
 
   // Loads the FileSystem specified by the input value into the result
-  static Status Load(const std::string& value,
-                     std::shared_ptr<FileSystem>* result);
+  // @see Customizable for a more detailed description of the parameters and
+  // return codes
+  // @param config_options Controls how the FileSystem is loaded
+  // @param value The name and optional properties describing the file system
+  //      to load.
+  // @param result On success, returns the loaded FileSystem
+  // @return OK if the FileSystem was successfully loaded.
+  // @return not-OK if the load failed.
+  static Status CreateFromString(const ConfigOptions& options,
+                                 const std::string& value,
+                                 std::shared_ptr<FileSystem>* result);
 
   // Return a default fie_system suitable for the current operating
   // system.  Sophisticated users may wish to provide their own Env
@@ -170,6 +184,35 @@ class FileSystem {
   //
   // The result of Default() belongs to rocksdb and must never be deleted.
   static std::shared_ptr<FileSystem> Default();
+
+  // Handles the event when a new DB or a new ColumnFamily starts using the
+  // specified data paths.
+  //
+  // The data paths might be shared by different DBs or ColumnFamilies,
+  // so RegisterDbPaths might be called with the same data paths.
+  // For example, when CreateColumnFamily is called multiple times with the same
+  // data path, RegisterDbPaths will also be called with the same data path.
+  //
+  // If the return status is ok, then the paths must be correspondingly
+  // called in UnregisterDbPaths;
+  // otherwise this method should have no side effect, and UnregisterDbPaths
+  // do not need to be called for the paths.
+  //
+  // Different implementations may take different actions.
+  // By default, it's a no-op and returns Status::OK.
+  virtual Status RegisterDbPaths(const std::vector<std::string>& /*paths*/) {
+    return Status::OK();
+  }
+  // Handles the event a DB or a ColumnFamily stops using the specified data
+  // paths.
+  //
+  // It should be called corresponding to each successful RegisterDbPaths.
+  //
+  // Different implementations may take different actions.
+  // By default, it's a no-op and returns Status::OK.
+  virtual Status UnregisterDbPaths(const std::vector<std::string>& /*paths*/) {
+    return Status::OK();
+  }
 
   // Create a brand new sequentially-readable file with the specified name.
   // On success, stores a pointer to the new file in *result and returns OK.
@@ -234,7 +277,7 @@ class FileSystem {
                                      const std::string& old_fname,
                                      const FileOptions& file_opts,
                                      std::unique_ptr<FSWritableFile>* result,
-                                     IODebugContext* dbg) = 0;
+                                     IODebugContext* dbg);
 
   // Open `fname` for random read and write, if file doesn't exist the file
   // will be created.  On success, stores a pointer to the new file in
@@ -436,6 +479,10 @@ class FileSystem {
                                    std::string* output_path,
                                    IODebugContext* dbg) = 0;
 
+  // Sanitize the FileOptions. Typically called by a FileOptions/EnvOptions
+  // copy constructor
+  virtual void SanitizeFileOptions(FileOptions* /*opts*/) const {}
+
   // OptimizeForLogRead will create a new FileOptions object that is a copy of
   // the FileOptions in the parameters, but is optimized for reading log files.
   virtual FileOptions OptimizeForLogRead(const FileOptions& file_options) const;
@@ -485,6 +532,10 @@ class FileSystem {
                                 IODebugContext* /*dbg*/) {
     return IOStatus::NotSupported();
   }
+
+  virtual IOStatus IsDirectory(const std::string& /*path*/,
+                               const IOOptions& options, bool* is_dir,
+                               IODebugContext* /*dgb*/) = 0;
 
   // If you're adding methods here, remember to add them to EnvWrapper too.
 
@@ -972,11 +1023,13 @@ class FSDirectory {
 class FileSystemWrapper : public FileSystem {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
-  explicit FileSystemWrapper(FileSystem* t) : target_(t) {}
+  explicit FileSystemWrapper(std::shared_ptr<FileSystem> t) : target_(t) {}
   ~FileSystemWrapper() override {}
 
+  const char* Name() const override { return target_->Name(); }
+
   // Return the target to which this Env forwards all calls
-  FileSystem* target() const { return target_; }
+  FileSystem* target() const { return target_.get(); }
 
   // The following text is boilerplate that forwards all methods to target()
   IOStatus NewSequentialFile(const std::string& f,
@@ -1120,6 +1173,10 @@ class FileSystemWrapper : public FileSystem {
     return target_->NewLogger(fname, options, result, dbg);
   }
 
+  void SanitizeFileOptions(FileOptions* opts) const override {
+    target_->SanitizeFileOptions(opts);
+  }
+
   FileOptions OptimizeForLogRead(
                   const FileOptions& file_options) const override {
     return target_->OptimizeForLogRead(file_options);
@@ -1151,9 +1208,13 @@ class FileSystemWrapper : public FileSystem {
                         uint64_t* diskfree, IODebugContext* dbg) override {
     return target_->GetFreeSpace(path, options, diskfree, dbg);
   }
+  IOStatus IsDirectory(const std::string& path, const IOOptions& options,
+                       bool* is_dir, IODebugContext* dbg) override {
+    return target_->IsDirectory(path, options, is_dir, dbg);
+  }
 
  private:
-  FileSystem* target_;
+  std::shared_ptr<FileSystem> target_;
 };
 
 class FSSequentialFileWrapper : public FSSequentialFile {
@@ -1351,8 +1412,13 @@ class FSDirectoryWrapper : public FSDirectory {
   FSDirectory* target_;
 };
 
+// A utility routine: write "data" to the named file.
+extern IOStatus WriteStringToFile(FileSystem* fs, const Slice& data,
+                                  const std::string& fname,
+                                  bool should_sync = false);
+
 // A utility routine: read contents of named file into *data
-extern Status ReadFileToString(FileSystem* fs, const std::string& fname,
-                               std::string* data);
+extern IOStatus ReadFileToString(FileSystem* fs, const std::string& fname,
+                                 std::string* data);
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -37,12 +37,14 @@ class CompactionFilter;
 class CompactionFilterFactory;
 class Comparator;
 class ConcurrentTaskLimiter;
+class DBPlugin;
 class Env;
 enum InfoLogLevel : unsigned char;
 class SstFileManager;
 class FilterPolicy;
 class Logger;
 class MergeOperator;
+class ObjectRegistry;
 class Snapshot;
 class MemTableRepFactory;
 class RateLimiter;
@@ -51,6 +53,13 @@ class Statistics;
 class InternalKeyComparator;
 class WalFilter;
 class FileSystem;
+
+enum class CpuPriority {
+  kIdle = 0,
+  kLow = 1,
+  kNormal = 2,
+  kHigh = 3,
+};
 
 // DB contents are stored in a set of blocks, each of which holds a
 // sequence of key,value pairs.  Each block may be compressed before
@@ -398,11 +407,6 @@ struct DBOptions {
   // through env will be deprecated in favor of file_system (see below)
   // Default: Env::Default()
   Env* env = Env::Default();
-
-  // Use the specified object to interact with the storage to
-  // read/write files. This is in addition to env. This option should be used
-  // if the desired storage subsystem provides a FileSystem implementation.
-  std::shared_ptr<FileSystem> file_system = nullptr;
 
   // Use to control write rate of flush and compaction. Flush has higher
   // priority than compaction. Rate limiting is disabled if nullptr.
@@ -872,6 +876,10 @@ struct DBOptions {
   // when specific RocksDB event happens.
   std::vector<std::shared_ptr<EventListener>> listeners;
 
+  // A vector of DBPlugins whos functions will be called to setup and tear down
+  // the database
+  std::vector<std::shared_ptr<DBPlugin>> plugins;
+
   // If true, then the status of the threads involved in this DB will
   // be tracked and available via GetThreadList() API.
   //
@@ -1019,6 +1027,9 @@ struct DBOptions {
   // The filter is invoked at startup and is invoked from a single-thread
   // currently.
   WalFilter* wal_filter = nullptr;
+
+  // The object registry to use to load objects for this database instance
+  std::shared_ptr<ObjectRegistry> object_registry;
 #endif  // ROCKSDB_LITE
 
   // If true, then DB::Open / CreateColumnFamily / DropColumnFamily
@@ -1127,12 +1138,24 @@ struct DBOptions {
   // Default: 0
   size_t log_readahead_size = 0;
 
-  // If user does NOT provide SST file checksum function, the SST file checksum
-  // will NOT be used. The single checksum instance are shared by options and
-  // file writers. Make sure the algorithm is thread safe.
+  // If user does NOT provide the checksum generator factory, the file checksum
+  // will NOT be used. A new file checksum generator object will be created
+  // when a SST file is created. Therefore, each created FileChecksumGenerator
+  // will only be used from a single thread and so does not need to be
+  // thread-safe.
   //
   // Default: nullptr
-  std::shared_ptr<FileChecksumFunc> sst_file_checksum_func = nullptr;
+  std::shared_ptr<FileChecksumGenFactory> file_checksum_gen_factory = nullptr;
+
+  // By default, RocksDB recovery fails if any table file referenced in
+  // MANIFEST are missing after scanning the MANIFEST.
+  // Best-efforts recovery is another recovery mode that
+  // tries to restore the database to the most recent point in time without
+  // missing file.
+  // Currently not compatible with atomic flush. Furthermore, WAL files will
+  // not be used for recovery if best_efforts_recovery is true.
+  // Default: false
+  bool best_efforts_recovery = false;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
@@ -1326,9 +1349,23 @@ struct ReadOptions {
   // specified timestamp. All timestamps of the same database must be of the
   // same length and format. The user is responsible for providing a customized
   // compare function via Comparator to order <key, timestamp> tuples.
+  // For iterator, iter_start_ts is the lower bound (older) and timestamp
+  // serves as the upper bound. Versions of the same record that fall in
+  // the timestamp range will be returned. If iter_start_ts is nullptr,
+  // only the most recent version visible to timestamp is returned.
   // The user-specified timestamp feature is still under active development,
   // and the API is subject to change.
   const Slice* timestamp;
+  const Slice* iter_start_ts;
+
+  // Deadline for completing the read request (only MultiGet for now) in us.
+  // It should be set to some number of microseconds since a fixed point in
+  // time, identical to that used by system time. The best way is to use
+  // env->NowMicros() + some timeout. This is best efforts. The call may
+  // exceed the deadline if there is IO involved and the file system doesn't
+  // support deadlines, or due to checking for deadline periodically rather
+  // than for every key if processing a batch
+  std::chrono::microseconds deadline;
 
   ReadOptions();
   ReadOptions(bool cksum, bool cache);
