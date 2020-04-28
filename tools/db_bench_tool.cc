@@ -1314,9 +1314,9 @@ rocksdb::Env* CreateAwsEnv(const std::string& dbpath ,
 static rocksdb::FactoryFunc<rocksdb::Env> s3_reg =
     rocksdb::ObjectLibrary::Default()->Register<rocksdb::Env>(
         "s3://.*", [](const std::string& uri,
-                      std::unique_ptr<rocksdb::Env>* env_guard, std::string*) {
-          CreateAwsEnv(uri, env_guard);
-          return env_guard->get();
+                      std::unique_ptr<rocksdb::Env>* guard, std::string*) {
+          CreateAwsEnv(uri, guard);
+          return guard->get();
         });
 #endif /* USE_AWS */
 

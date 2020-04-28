@@ -16,12 +16,17 @@ class CloudLogControllerImpl : public CloudLogController {
   static constexpr const char* kCacheDir = "/tmp/ROCKSET";
   // Delay in Cloud Log stream: writes to read visibility
   static const std::chrono::microseconds kRetryPeriod;
+  static Status CreateKinesisController(
+      std::unique_ptr<CloudLogController>* result);
+  static Status CreateKafkaController(
+      std::unique_ptr<CloudLogController>* result);
+  static Status PrepareOptions(CloudEnv* cloud, const ConfigOptions& opts);
 
   static const uint32_t kAppend = 0x1;  // add a new record to a logfile
   static const uint32_t kDelete = 0x2;  // delete a log file
   static const uint32_t kClosed = 0x4;  // closing a file
 
-  CloudLogControllerImpl(CloudEnv* env);
+  CloudLogControllerImpl();
   virtual ~CloudLogControllerImpl();
   static Status CreateKinesisController(
       CloudEnv* env, std::shared_ptr<CloudLogController>* result);
@@ -50,6 +55,9 @@ class CloudLogControllerImpl : public CloudLogController {
                              const EnvOptions& options) override;
   Status FileExists(const std::string& fname) override;
   Status GetFileSize(const std::string& logical_fname, uint64_t* size) override;
+  Status PrepareOptions(const ConfigOptions& opts) override;
+  Status ValidateOptions(const DBOptions& db_opts,
+                         const ColumnFamilyOptions& cf_opts) const override;
 
  protected:
   // Converts an original pathname to a pathname in the cache.
