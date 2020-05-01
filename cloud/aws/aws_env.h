@@ -89,7 +89,8 @@ class AwsEnv : public CloudEnvImpl {
                     const std::string& dbid) override;
   Status DeleteCloudFileFromDest(const std::string& fname) override;
   Status CopyLocalFileToDest(const std::string& local_name,
-                             const std::string& cloud_name) override;
+                             const std::string& cloud_name,
+                             bool wait_for_stable) override;
 
   void RemoveFileFromDeletionQueue(const std::string& filename);
 

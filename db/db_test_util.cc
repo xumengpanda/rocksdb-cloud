@@ -53,7 +53,7 @@ ROT13BlockCipher rot13Cipher_(16);
 #endif  // ROCKSDB_LITE
 
 DBTestBase::DBTestBase(const std::string path)
-    : option_env_(kDefaultEnv),
+    : option_env_(kAwsEnv),
       mem_env_(nullptr),
       encrypted_env_(nullptr),
       option_config_(kDefault),
@@ -220,6 +220,7 @@ bool DBTestBase::ChangeOptions(int skip_mask) {
        continue;
      }
    } else {
+     printf("MJR: Using Option[%d] Env[%d]\n", option_config_, option_env_);
      auto options = CurrentOptions();
      options.create_if_missing = true;
      DestroyAndReopen(options);
@@ -652,6 +653,7 @@ Options DBTestBase::GetOptions(
   rocksdb::CloudEnvOptions coptions;
   CloudEnv* cenv = nullptr;
   std::string region;
+  coptions.ensure_read_your_own_writes = true;
   coptions.TEST_Initialize("dbtest.", prefix, region);
   Status st = AwsEnv::NewAwsEnv(parent, coptions, info_log_, &cenv);
   ((CloudEnvImpl*)cenv)->TEST_DisableCloudManifest();

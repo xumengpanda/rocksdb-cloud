@@ -300,6 +300,8 @@ class CloudEnvOptions {
   // Default: false.
   bool skip_cloud_files_in_getchildren;
 
+  // This flag will wait for 
+  bool ensure_read_your_own_writes;
   CloudEnvOptions(
       CloudType _cloud_type = CloudType::kCloudAws,
       LogType _log_type = LogType::kLogKafka,
@@ -314,7 +316,8 @@ class CloudEnvOptions {
       bool _use_aws_transfer_manager = false,
       int _number_objects_listed_in_one_iteration = 5000,
       bool _constant_sst_file_size_in_sst_file_manager = -1,
-      bool _skip_cloud_files_in_getchildren = false)
+      bool _skip_cloud_files_in_getchildren = false,
+      bool _ensure_read_your_own_writes = false)
       : cloud_type(_cloud_type),
         log_type(_log_type),
         keep_local_sst_files(_keep_local_sst_files),
@@ -334,7 +337,8 @@ class CloudEnvOptions {
             _number_objects_listed_in_one_iteration),
         constant_sst_file_size_in_sst_file_manager(
             _constant_sst_file_size_in_sst_file_manager),
-        skip_cloud_files_in_getchildren(_skip_cloud_files_in_getchildren) {}
+        skip_cloud_files_in_getchildren(_skip_cloud_files_in_getchildren),
+        ensure_read_your_own_writes(_ensure_read_your_own_writes) {}
 
   // print out all options to the log
   void Dump(Logger* log) const;
@@ -435,7 +439,8 @@ class CloudEnv : public Env {
   virtual Status DeleteCloudFileFromDest(const std::string& fname) = 0;
   // Copies a local file to a destination bucket.
   virtual Status CopyLocalFileToDest(const std::string& local_name,
-                                     const std::string& cloud_name) = 0;
+                                     const std::string& cloud_name,
+                                     bool wait_for_exists = false) = 0;
 
   // Transfers the filename from RocksDB's domain to the physical domain, based
   // on information stored in CLOUDMANIFEST.

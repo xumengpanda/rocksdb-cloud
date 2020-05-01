@@ -190,7 +190,9 @@ Status CloudStorageWritableFileImpl::Close() {
   local_file_.reset();
 
   if (!is_manifest_) {
-    status_ = env_->CopyLocalFileToDest(fname_, cloud_fname_);
+    status_ = env_->CopyLocalFileToDest(fname_, cloud_fname_,
+                                        !env_->GetCloudEnvOptions().keep_local_sst_files &&
+                                        env_->GetCloudEnvOptions().ensure_read_your_own_writes);
     if (!status_.ok()) {
       Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
           "[%s] CloudWritableFile closing PutObject failed on local file %s",

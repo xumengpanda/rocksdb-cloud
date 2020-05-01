@@ -383,10 +383,24 @@ Status AwsEnv::DeleteFile(const std::string& logical_fname) {
 }
 
 Status AwsEnv::CopyLocalFileToDest(const std::string& local_name,
-                                   const std::string& dest_name) {
+                                   const std::string& dest_name,
+                                   bool wait_for_stable) {
   RemoveFileFromDeletionQueue(basename(local_name));
-  return cloud_env_options.storage_provider->PutCloudObject(
+  Status st = cloud_env_options.storage_provider->PutCloudObject(
       local_name, GetDestBucketName(), dest_name);
+  if (wait_for_stable && st.ok()) {
+    do {
+      st = cloud_env_options.storage_provider->ExistsCloudObject(GetDestBucketName(),
+                                                               dest_name);
+      if (!st.ok()) {
+        Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[%s] Waiting for file %s/%s to exist %s",
+            Name(), GetDestBucketName().c_str(), dest_name.c_str(), st.ToString().c_str());
+        printf("***MJR [%s] Waiting for file %s/%s to exist %s\n",
+               Name(), GetDestBucketName().c_str(), dest_name.c_str(), st.ToString().c_str());
+      }
+    } while (!st.ok());
+  }
+  return st;
 }
 
 Status AwsEnv::DeleteCloudFileFromDest(const std::string& fname) {
