@@ -23,8 +23,7 @@ class CloudEnvImpl : public CloudEnv {
 
  public:
   // Constructor
-  CloudEnvImpl(const CloudEnvOptions& options, Env* base_env,
-               const std::shared_ptr<Logger>& logger);
+  CloudEnvImpl(const CloudEnvOptions& options, Env* base_env);
 
   virtual ~CloudEnvImpl();
 

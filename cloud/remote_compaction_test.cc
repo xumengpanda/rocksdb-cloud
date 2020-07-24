@@ -49,7 +49,7 @@ class RemoteCompactionTest : public testing::Test {
     base_env_->NewLogger(test::TmpDir(base_env_) + "/rocksdb-cloud.log",
                          &options_.info_log);
     options_.info_log->SetInfoLogLevel(InfoLogLevel::DEBUG_LEVEL);
-
+    cloud_env_options_.info_log = options_.info_log;
     Cleanup();
   }
 
@@ -61,8 +61,7 @@ class RemoteCompactionTest : public testing::Test {
 
     CloudEnv* aenv;
     // create a dummy aws env
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,
-                                  options_.info_log, &aenv));
+    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, &aenv));
     aenv_.reset(aenv);
     // delete all pre-existing contents from the bucket
     Status st = aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
@@ -98,7 +97,7 @@ class RemoteCompactionTest : public testing::Test {
   void CreateAwsEnv() {
     CloudEnv* aenv;
     ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,
-                                  options_.info_log, &aenv));
+                                  &aenv));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
     ((AwsEnv*)aenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
@@ -160,7 +159,7 @@ class RemoteCompactionTest : public testing::Test {
       copt.keep_local_sst_files = true;
     }
     // Create new AWS env
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, copt, options_.info_log, &cenv));
+    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, copt, &cenv));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
     ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));

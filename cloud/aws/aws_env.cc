@@ -170,9 +170,8 @@ Status AwsCloudAccessCredentials::GetCredentialsProvider(
 // The AWS credentials are specified to the constructor via
 // access_key_id and secret_key.
 //
-AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options,
-               const std::shared_ptr<Logger>& info_log)
-    : CloudEnvImpl(_cloud_env_options, underlying_env, info_log),
+AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options)
+    : CloudEnvImpl(_cloud_env_options, underlying_env),
       rng_(time(nullptr)) {
   Aws::InitAPI(Aws::SDKOptions());
   if (cloud_env_options.src_bucket.GetRegion().empty() ||
@@ -200,7 +199,7 @@ void AwsEnv::Shutdown() { Aws::ShutdownAPI(Aws::SDKOptions()); }
 //
 Status AwsEnv::SaveDbid(const std::string& bucket_name, const std::string& dbid,
                         const std::string& dirname) {
-  Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "[s3] SaveDbid dbid %s dir '%s'",
+  Log(InfoLogLevel::DEBUG_LEVEL, GetInfoLogger(), "[s3] SaveDbid dbid %s dir '%s'",
       dbid.c_str(), dirname.c_str());
 
   std::string dbidkey = dbid_registry_ + dbid;
@@ -211,12 +210,12 @@ Status AwsEnv::SaveDbid(const std::string& bucket_name, const std::string& dbid,
       bucket_name, dbidkey, metadata);
 
   if (!st.ok()) {
-    Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+    Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
         "[aws] Bucket %s SaveDbid error in saving dbid %s dirname %s %s",
         bucket_name.c_str(), dbid.c_str(), dirname.c_str(),
         st.ToString().c_str());
   } else {
-    Log(InfoLogLevel::INFO_LEVEL, info_log_,
+    Log(InfoLogLevel::INFO_LEVEL, GetInfoLogger(),
         "[aws] Bucket %s SaveDbid dbid %s dirname %s %s", bucket_name.c_str(),
         dbid.c_str(), dirname.c_str(), "ok");
   }
@@ -230,7 +229,7 @@ Status AwsEnv::GetPathForDbid(const std::string& bucket,
                               const std::string& dbid, std::string* dirname) {
   std::string dbidkey = dbid_registry_ + dbid;
 
-  Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
+  Log(InfoLogLevel::DEBUG_LEVEL, GetInfoLogger(),
       "[s3] Bucket %s GetPathForDbid dbid %s", bucket.c_str(), dbid.c_str());
 
   CloudObjectInformation info;
@@ -238,11 +237,11 @@ Status AwsEnv::GetPathForDbid(const std::string& bucket,
       bucket, dbidkey, &info);
   if (!st.ok()) {
     if (st.IsNotFound()) {
-      Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
           "[aws] %s GetPathForDbid error non-existent dbid %s %s",
           bucket.c_str(), dbid.c_str(), st.ToString().c_str());
     } else {
-      Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
           "[aws] %s GetPathForDbid error dbid %s %s", bucket.c_str(),
           dbid.c_str(), st.ToString().c_str());
     }
@@ -257,7 +256,7 @@ Status AwsEnv::GetPathForDbid(const std::string& bucket,
   } else {
     st = Status::NotFound("GetPathForDbid");
   }
-  Log(InfoLogLevel::INFO_LEVEL, info_log_, "[aws] %s GetPathForDbid dbid %s %s",
+  Log(InfoLogLevel::INFO_LEVEL, GetInfoLogger(), "[aws] %s GetPathForDbid dbid %s %s",
       bucket.c_str(), dbid.c_str(), st.ToString().c_str());
   return st;
 }
@@ -271,7 +270,7 @@ Status AwsEnv::GetDbidList(const std::string& bucket, DbidList* dblist) {
   Status st = cloud_env_options.storage_provider->ListCloudObjects(
       bucket, dbid_registry_, &dbid_list);
   if (!st.ok()) {
-    Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+    Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
         "[aws] %s GetDbidList error in GetChildrenFromS3 %s", bucket.c_str(),
         st.ToString().c_str());
     return st;
@@ -281,7 +280,7 @@ Status AwsEnv::GetDbidList(const std::string& bucket, DbidList* dblist) {
     std::string dirname;
     st = GetPathForDbid(bucket, dbid, &dirname);
     if (!st.ok()) {
-      Log(InfoLogLevel::ERROR_LEVEL, info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
           "[aws] %s GetDbidList error in GetPathForDbid(%s) %s", bucket.c_str(),
           dbid.c_str(), st.ToString().c_str());
       return st;
@@ -300,7 +299,7 @@ Status AwsEnv::DeleteDbid(const std::string& bucket, const std::string& dbid) {
   std::string dbidkey = dbid_registry_ + dbid;
   Status st =
       cloud_env_options.storage_provider->DeleteCloudObject(bucket, dbidkey);
-  Log(InfoLogLevel::DEBUG_LEVEL, info_log_,
+  Log(InfoLogLevel::DEBUG_LEVEL, GetInfoLogger(),
       "[aws] %s DeleteDbid DeleteDbid(%s) %s", bucket.c_str(), dbid.c_str(),
       st.ToString().c_str());
   return st;
@@ -317,7 +316,6 @@ Status AwsEnv::UnlockFile(FileLock* /*lock*/) { return Status::OK(); }
 
 // The factory method for creating an S3 Env
 Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
-                         const std::shared_ptr<Logger>& info_log,
                          CloudEnv** cenv) {
   Status status;
   *cenv = nullptr;
@@ -340,18 +338,18 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
     } else {
       status =
           Status::NotSupported("We currently only support Kinesis and Kafka");
-      Log(InfoLogLevel::ERROR_LEVEL, info_log,
+      Log(InfoLogLevel::ERROR_LEVEL, options.info_log,
           "[aws] NewAwsEnv Unknown log type %d. %s", cloud_options.log_type,
           status.ToString().c_str());
     }
   }
   if (!status.ok()) {
-    Log(InfoLogLevel::ERROR_LEVEL, info_log,
+    Log(InfoLogLevel::ERROR_LEVEL, options.info_log,
         "[aws] NewAwsEnv Unable to create environment %s",
         status.ToString().c_str());
     return status;
   }
-  std::unique_ptr<AwsEnv> aenv(new AwsEnv(base_env, options, info_log));
+  std::unique_ptr<AwsEnv> aenv(new AwsEnv(base_env, options));
   status = aenv->Prepare();
   if (status.ok()) {
     *cenv = aenv.release();

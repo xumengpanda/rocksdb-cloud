@@ -101,9 +101,8 @@ void BucketOptions::TEST_Initialize(const std::string& bucket,
   }
 }
 
-CloudEnv::CloudEnv(const CloudEnvOptions& options, Env* base,
-                   const std::shared_ptr<Logger>& logger)
-    : cloud_env_options(options), base_env_(base), info_log_(logger) {}
+CloudEnv::CloudEnv(const CloudEnvOptions& options, Env* base)
+    : cloud_env_options(options), base_env_(base) {}
 
 CloudEnv::~CloudEnv() {
   cloud_env_options.cloud_log_controller.reset();
@@ -115,7 +114,7 @@ Status CloudEnv::NewAwsEnv(
     const std::string& src_cloud_object, const std::string& src_cloud_region,
     const std::string& dest_cloud_bucket, const std::string& dest_cloud_object,
     const std::string& dest_cloud_region, const CloudEnvOptions& cloud_options,
-    const std::shared_ptr<Logger>& logger, CloudEnv** cenv) {
+    CloudEnv** cenv) {
   CloudEnvOptions options = cloud_options;
   if (!src_cloud_bucket.empty())
     options.src_bucket.SetBucketName(src_cloud_bucket);
@@ -128,28 +127,25 @@ Status CloudEnv::NewAwsEnv(
     options.dest_bucket.SetObjectPath(dest_cloud_object);
   if (!dest_cloud_region.empty())
     options.dest_bucket.SetRegion(dest_cloud_region);
-  return NewAwsEnv(base_env, options, logger, cenv);
+  return NewAwsEnv(base_env, options, cenv);
 }
 
 #ifndef USE_AWS
 Status CloudEnv::NewAwsEnv(Env* /*base_env*/,
                            const CloudEnvOptions& /*options*/,
-                           const std::shared_ptr<Logger>& /*logger*/,
                            CloudEnv** /*cenv*/) {
   return Status::NotSupported("RocksDB Cloud not compiled with AWS support");
 }
 #else
 Status CloudEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& options,
-                           const std::shared_ptr<Logger>& logger,
                            CloudEnv** cenv) {
   // Dump out cloud env options
-  options.Dump(logger.get());
+  options.Dump(options.info_log.get());
 
-  Status st = AwsEnv::NewAwsEnv(base_env, options, logger, cenv);
+  Status st = AwsEnv::NewAwsEnv(base_env, options, cenv);
   if (st.ok()) {
     // store a copy of the logger
     CloudEnvImpl* cloud = static_cast<CloudEnvImpl*>(*cenv);
-    cloud->info_log_ = logger;
 
     // start the purge thread only if there is a destination bucket
     if (options.dest_bucket.IsValid() && options.run_purger) {

@@ -300,6 +300,8 @@ class CloudEnvOptions {
   // Default: false.
   bool skip_cloud_files_in_getchildren;
 
+  std::shared_ptr<Logger> info_log;  // informational messages
+
   CloudEnvOptions(
       CloudType _cloud_type = CloudType::kCloudAws,
       LogType _log_type = LogType::kLogKafka,
@@ -364,16 +366,18 @@ class CloudEnv : public Env {
   CloudEnvOptions cloud_env_options;
   Env* base_env_;  // The underlying env
 
-  CloudEnv(const CloudEnvOptions& options, Env* base,
-           const std::shared_ptr<Logger>& logger);
+  CloudEnv(const CloudEnvOptions& options, Env* base);
 
  public:
-  std::shared_ptr<Logger> info_log_;  // informational messages
   virtual ~CloudEnv();
   // Returns the underlying env
   Env* GetBaseEnv() { return base_env_; }
   virtual const char* Name() const { return "cloud"; }
 
+  std::shared_ptr<Logger> & GetInfoLogger() {
+    return cloud_env_options.info_log;
+  }
+  
   virtual Status PreloadCloudManifest(const std::string& local_dbname) = 0;
 
   // Reads a file from the cloud
@@ -462,10 +466,8 @@ class CloudEnv : public Env {
                           const std::string& dest_object_prefix,
                           const std::string& dest_bucket_region,
                           const CloudEnvOptions& env_options,
-                          const std::shared_ptr<Logger>& logger,
                           CloudEnv** cenv);
   static Status NewAwsEnv(Env* base_env, const CloudEnvOptions& env_options,
-                          const std::shared_ptr<Logger>& logger,
                           CloudEnv** cenv);
 };
 

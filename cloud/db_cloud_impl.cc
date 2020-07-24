@@ -94,15 +94,16 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   }
 
   CloudEnvImpl* cenv = static_cast<CloudEnvImpl*>(options.env);
-  if (!cenv->info_log_) {
-    cenv->info_log_ = options.info_log;
+  const CloudEnvOptions& copts = cenv->GetCloudEnvOptions();
+  if (!copts.info_log) {
+    (const_cast<CloudEnvOptions&>(copts)).info_log = options.info_log;
   }
 
   // Use a constant sized SST File Manager if necesary.
   // NOTE: if user already passes in an SST File Manager, we will respect user's
   // SST File Manager instead.
   auto constant_sst_file_size =
-      cenv->GetCloudEnvOptions().constant_sst_file_size_in_sst_file_manager;
+      copts.constant_sst_file_size_in_sst_file_manager;
   if (constant_sst_file_size >= 0 && options.sst_file_manager == nullptr) {
     // rate_bytes_per_sec, max_trash_db_ratio, bytes_max_delete_chunk are
     // default values in NewSstFileManager.
@@ -173,8 +174,8 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   // no longer need to verify file sizes for each file that we open. Note that
   // this might have a data race with background compaction, but it's not a big
   // deal, since it's a boolean and it does not impact correctness in any way.
-  if (cenv->GetCloudEnvOptions().validate_filesize) {
-    *const_cast<bool*>(&cenv->GetCloudEnvOptions().validate_filesize) = false;
+  if (copts.validate_filesize) {
+    *const_cast<bool*>(&copts.validate_filesize) = false;
   }
 
   if (st.ok()) {

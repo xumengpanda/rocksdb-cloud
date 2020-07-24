@@ -1267,10 +1267,9 @@ ROCKSDB_NAMESPACE::Env* CreateAwsEnv(
     const std::string& dbpath,
     std::unique_ptr<ROCKSDB_NAMESPACE::Env>* result) {
   fprintf(stderr, "Creating AwsEnv for path %s\n", dbpath.c_str());
-  std::shared_ptr<ROCKSDB_NAMESPACE::Logger> info_log;
-  info_log.reset(new ROCKSDB_NAMESPACE::StderrLogger(
-      ROCKSDB_NAMESPACE::InfoLogLevel::WARN_LEVEL));
   ROCKSDB_NAMESPACE::CloudEnvOptions coptions;
+  coptions.info_log.reset(new ROCKSDB_NAMESPACE::StderrLogger(
+      ROCKSDB_NAMESPACE::InfoLogLevel::WARN_LEVEL));
   std::string region;
   if (FLAGS_aws_access_id.size() != 0) {
     coptions.credentials.InitializeSimple(FLAGS_aws_access_id,
@@ -1278,7 +1277,6 @@ ROCKSDB_NAMESPACE::Env* CreateAwsEnv(
     region = FLAGS_aws_region;
   }
   assert(coptions.credentials.HasValid().ok());
-
   coptions.keep_local_sst_files = FLAGS_keep_local_sst_files;
   if (FLAGS_db.empty()) {
     coptions.TEST_Initialize("dbbench.", "db-bench", region);
@@ -1287,7 +1285,7 @@ ROCKSDB_NAMESPACE::Env* CreateAwsEnv(
   }
   ROCKSDB_NAMESPACE::CloudEnv* s;
   ROCKSDB_NAMESPACE::Status st = ROCKSDB_NAMESPACE::AwsEnv::NewAwsEnv(
-      ROCKSDB_NAMESPACE::Env::Default(), coptions, std::move(info_log), &s);
+      ROCKSDB_NAMESPACE::Env::Default(), coptions, &s);
   assert(st.ok());
   ((ROCKSDB_NAMESPACE::CloudEnvImpl*)s)->TEST_DisableCloudManifest();
   result->reset(s);

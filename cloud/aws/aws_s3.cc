@@ -442,7 +442,7 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
   if (!env->SrcMatchesDest() && env->HasSrcBucket() && env->HasDestBucket()) {
     if (cloud_opts.src_bucket.GetRegion() !=
         cloud_opts.dest_bucket.GetRegion()) {
-      Log(InfoLogLevel::ERROR_LEVEL, env->info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, env->GetInfoLogger(),
           "[aws] NewAwsEnv Buckets %s, %s in two different regions %s, %s "
           "is not supported",
           cloud_opts.src_bucket.GetBucketName().c_str(),
@@ -459,10 +459,10 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> creds;
     status = cloud_opts.credentials.GetCredentialsProvider(&creds);
     if (!status.ok()) {
-      Log(InfoLogLevel::INFO_LEVEL, env->info_log_,
+      Log(InfoLogLevel::INFO_LEVEL, env->GetInfoLogger(),
           "[aws] NewAwsEnv - Bad AWS credentials");
     } else {
-      Header(env->info_log_, "S3 connection to endpoint in region: %s",
+      Header(env->GetInfoLogger(), "S3 connection to endpoint in region: %s",
              config.region.c_str());
       s3client_ =
           std::make_shared<AwsS3ClientWrapper>(creds, config, cloud_opts);
@@ -534,12 +534,12 @@ Status S3StorageProvider::EmptyBucket(const std::string& bucket_name,
   // Get all the objects in the  bucket
   Status st = ListCloudObjects(bucket_name, object_path, &results);
   if (!st.ok()) {
-    Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+    Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
         "[s3] EmptyBucket unable to find objects in bucket %s %s",
         bucket_name.c_str(), st.ToString().c_str());
     return st;
   }
-  Log(InfoLogLevel::DEBUG_LEVEL, env_->info_log_,
+  Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
       "[s3] EmptyBucket going to delete %" ROCKSDB_PRIszt
       " objects in bucket %s",
       results.size(), bucket_name.c_str());
@@ -548,7 +548,7 @@ Status S3StorageProvider::EmptyBucket(const std::string& bucket_name,
   for (auto path : results) {
     st = DeleteCloudObject(bucket_name, path);
     if (!st.ok()) {
-      Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
           "[s3] EmptyBucket Unable to delete %s in bucket %s %s", path.c_str(),
           bucket_name.c_str(), st.ToString().c_str());
     }
@@ -579,7 +579,7 @@ Status S3StorageProvider::DeleteCloudObject(const std::string& bucket_name,
     }
   }
 
-  Log(InfoLogLevel::INFO_LEVEL, env_->info_log_,
+  Log(InfoLogLevel::INFO_LEVEL, env_->GetInfoLogger(),
       "[s3] DeleteFromS3 %s/%s, status %s", bucket_name.c_str(),
       object_path.c_str(), st.ToString().c_str());
 
@@ -620,7 +620,7 @@ Status S3StorageProvider::ListCloudObjects(const std::string& bucket_name,
           outcome.GetError();
       std::string errmsg(error.GetMessage().c_str());
       if (IsNotFound(error.GetErrorType())) {
-        Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+        Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
             "[s3] GetChildren dir %s does not exist: %s", object_path.c_str(),
             errmsg.c_str());
         return Status::NotFound(object_path, errmsg.c_str());
@@ -704,7 +704,7 @@ Status S3StorageProvider::PutCloudObjectMetadata(
   if (!isSuccess) {
     const auto& error = outcome.GetError();
     std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-    Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+    Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
         "[s3] Bucket %s error in saving metadata %s", bucket_name.c_str(),
         errmsg.c_str());
     return Status::IOError(object_path, errmsg.c_str());
@@ -717,7 +717,7 @@ Status S3StorageProvider::DoNewCloudReadableFile(
     const std::string& content_hash,
     std::unique_ptr<CloudStorageReadableFile>* result,
     const EnvOptions& /*options*/) {
-  result->reset(new S3ReadableFile(s3client_, env_->info_log_, bucket, fname,
+  result->reset(new S3ReadableFile(s3client_, env_->GetInfoLogger(), bucket, fname,
                                    fsize, content_hash));
   return Status::OK();
 }
@@ -798,12 +798,12 @@ Status S3StorageProvider::CopyCloudObject(const std::string& bucket_name_src,
   if (!isSuccess) {
     const Aws::Client::AWSError<Aws::S3::S3Errors>& error = outcome.GetError();
     std::string errmsg(error.GetMessage().c_str());
-    Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+    Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
         "[s3] S3WritableFile src path %s error in copying to %s %s",
         src_url.c_str(), dest_object.c_str(), errmsg.c_str());
     return Status::IOError(dest_object.c_str(), errmsg.c_str());
   }
-  Log(InfoLogLevel::INFO_LEVEL, env_->info_log_,
+  Log(InfoLogLevel::INFO_LEVEL, env_->GetInfoLogger(),
       "[s3] S3WritableFile src path %s copied to %s %s", src_url.c_str(),
       dest_object.c_str(), st.ToString().c_str());
   return st;
@@ -824,7 +824,7 @@ Status S3StorageProvider::DoGetCloudObject(const std::string& bucket_name,
     } else {
       const auto& error = handle->GetLastError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
           "[s3] DownloadFile %s/%s error %s.", bucket_name.c_str(),
           object_path.c_str(), errmsg.c_str());
       if (IsNotFound(error.GetErrorType())) {
@@ -847,7 +847,7 @@ Status S3StorageProvider::DoGetCloudObject(const std::string& bucket_name,
     } else {
       const auto& error = outcome.GetError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
           "[s3] GetObject %s/%s error %s.", bucket_name.c_str(),
           object_path.c_str(), errmsg.c_str());
       if (IsNotFound(error.GetErrorType())) {
@@ -870,7 +870,7 @@ Status S3StorageProvider::DoPutCloudObject(const std::string& local_file,
     if (handle->GetStatus() != Aws::Transfer::TransferStatus::COMPLETED) {
       auto error = handle->GetLastError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
           "[s3] UploadFile %s/%s, size %" PRIu64 ", ERROR %s",
           bucket_name.c_str(), object_path.c_str(), file_size, errmsg.c_str());
       return Status::IOError(local_file, errmsg);
@@ -890,13 +890,13 @@ Status S3StorageProvider::DoPutCloudObject(const std::string& local_file,
     if (!outcome.IsSuccess()) {
       auto error = outcome.GetError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->info_log_,
+      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
           "[s3] PutCloudObject %s/%s, size %" PRIu64 ", ERROR %s",
           bucket_name.c_str(), object_path.c_str(), file_size, errmsg.c_str());
       return Status::IOError(local_file, errmsg);
     }
   }
-  Log(InfoLogLevel::INFO_LEVEL, env_->info_log_,
+  Log(InfoLogLevel::INFO_LEVEL, env_->GetInfoLogger(),
       "[s3] PutCloudObject %s/%s, size %" PRIu64 ", OK", bucket_name.c_str(),
       object_path.c_str(), file_size);
   return Status::OK();

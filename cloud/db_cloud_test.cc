@@ -52,7 +52,7 @@ class CloudTest : public testing::Test {
     base_env_->NewLogger(test::TmpDir(base_env_) + "/rocksdb-cloud.log",
                          &options_.info_log);
     options_.info_log->SetInfoLogLevel(InfoLogLevel::DEBUG_LEVEL);
-
+    cloud_env_options_.info_log = options_.info_log;
     Cleanup();
   }
 
@@ -64,8 +64,7 @@ class CloudTest : public testing::Test {
 
     CloudEnv* aenv;
     // create a dummy aws env
-    CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, options_.info_log,
-                        &aenv);
+    CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,  &aenv);
     aenv_.reset(aenv);
     // delete all pre-existing contents from the bucket
     Status st = aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
@@ -104,8 +103,7 @@ class CloudTest : public testing::Test {
     // Cleanup the cloud bucket
     if (!cloud_env_options_.src_bucket.GetBucketName().empty()) {
       CloudEnv* aenv;
-      Status st = CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,
-                                      options_.info_log, &aenv);
+      Status st = CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, &aenv);
       if (st.ok()) {
         aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
             aenv->GetSrcBucketName(), dbname_);
@@ -118,8 +116,7 @@ class CloudTest : public testing::Test {
 
   void CreateAwsEnv() {
     CloudEnv* aenv;
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,
-                                  options_.info_log, &aenv));
+    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, &aenv));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
     ((AwsEnv*)aenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
@@ -183,7 +180,7 @@ class CloudTest : public testing::Test {
       copt.keep_local_sst_files = true;
     }
     // Create new AWS env
-    Status st = CloudEnv::NewAwsEnv(base_env_, copt, options_.info_log, &cenv);
+    Status st = CloudEnv::NewAwsEnv(base_env_, copt, &cenv);
     if (!st.ok()) {
       return st;
     }

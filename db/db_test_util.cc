@@ -654,8 +654,9 @@ Env* DBTestBase::CreateNewAwsEnv(const std::string& prefix, Env* parent) {
   CloudEnvOptions coptions;
   CloudEnv* cenv = nullptr;
   std::string region;
+  coptions.info_log = info_log_;
   coptions.TEST_Initialize("dbtest.", prefix, region);
-  Status st = AwsEnv::NewAwsEnv(parent, coptions, info_log_, &cenv);
+  Status st = AwsEnv::NewAwsEnv(parent, coptions, &cenv);
   ((CloudEnvImpl*)cenv)->TEST_DisableCloudManifest();
   ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
   ROCKS_LOG_INFO(info_log_, "Created new aws env with path %s", prefix.c_str());
