@@ -9,7 +9,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 class CloudEnv;
-class CloudEnvOptions;
+struct CloudEnvOptions;
 
 // Creates a new file, appends data to a file or delete an existing file via
 // logging into a cloud stream (such as Kinesis).

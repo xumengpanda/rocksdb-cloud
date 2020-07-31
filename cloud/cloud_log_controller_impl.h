@@ -9,7 +9,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 class CloudEnv;
-class CloudEnvOptions;
+struct CloudEnvOptions;
 
 class CloudLogControllerImpl : public CloudLogController {
  public:
