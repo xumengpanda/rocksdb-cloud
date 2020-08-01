@@ -101,6 +101,9 @@ void BucketOptions::TEST_Initialize(const std::string& bucket,
   }
 }
 
+const std::string CloudEnv::kAwsCloudName = "aws";
+const std::string CloudEnv::kEnvCloudName = "cloud";
+
 CloudEnv::CloudEnv(const CloudEnvOptions& options, Env* base)
     : cloud_env_options(options), base_env_(base) {}
 
@@ -109,6 +112,19 @@ CloudEnv::~CloudEnv() {
   cloud_env_options.storage_provider.reset();
 }
 
+const char* CloudEnv::Name() const {
+    return kEnvCloudName.c_str();
+}
+
+const Env* CloudEnv::FindInstance(const std::string& name) const {
+  if (name == Name() || name == kEnvCloudName) {
+    return this;
+  } else if (name == "Default") {
+    return base_env_;
+  } else {
+    return nullptr;
+  }
+}    
 Status CloudEnv::NewAwsEnv(
     Env* base_env, const std::string& src_cloud_bucket,
     const std::string& src_cloud_object, const std::string& src_cloud_region,
@@ -144,12 +160,12 @@ Status CloudEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& options,
 
   Status st = AwsEnv::NewAwsEnv(base_env, options, cenv);
   if (st.ok()) {
-    // store a copy of the logger
-    CloudEnvImpl* cloud = static_cast<CloudEnvImpl*>(*cenv);
-
     // start the purge thread only if there is a destination bucket
     if (options.dest_bucket.IsValid() && options.run_purger) {
-      cloud->purge_thread_ = std::thread([cloud] { cloud->Purger(); });
+      CloudEnvImpl* impl = (*cenv)->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+      if (impl != nullptr) {
+        impl->purge_thread_ = std::thread([impl] { impl->Purger(); });
+      }
     }
   }
   return st;

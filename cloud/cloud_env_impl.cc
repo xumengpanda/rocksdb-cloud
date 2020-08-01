@@ -23,6 +23,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+const std::string CloudEnvImpl::kImplCloudName = "cloud_impl";
+
 CloudEnvImpl::CloudEnvImpl(const CloudEnvOptions& opts, Env* base)
     : CloudEnv(opts, base), purger_is_running_(true) {
   scheduler_ = CloudScheduler::Get();
@@ -41,6 +43,14 @@ CloudEnvImpl::~CloudEnvImpl() {
     files_to_delete_.clear();
   }
   StopPurger();
+}
+
+const Env* CloudEnvImpl::FindInstance(const std::string& name) const {
+  if (name == kImplCloudName) {
+    return this;
+  } else {
+    return CloudEnv::FindInstance(name);
+  }
 }
 
 Status CloudEnvImpl::ExistsCloudObject(const std::string& fname) {

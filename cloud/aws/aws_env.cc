@@ -193,6 +193,10 @@ AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options)
 
 void AwsEnv::Shutdown() { Aws::ShutdownAPI(Aws::SDKOptions()); }
 
+const char *AwsEnv::Name() const {
+  return kAwsCloudName.c_str();
+}
+
 //
 // All db in a bucket are stored in path /.rockset/dbid/<dbid>
 // The value of the object is the pathname where the db resides.

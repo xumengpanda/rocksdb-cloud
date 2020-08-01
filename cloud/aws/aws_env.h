@@ -54,7 +54,7 @@ class AwsEnv : public CloudEnvImpl {
 
   virtual ~AwsEnv() {}
 
-  const char* Name() const override { return "aws"; }
+  const char* Name() const override;
 
   // We cannot invoke Aws::ShutdownAPI from the destructor because there could
   // be

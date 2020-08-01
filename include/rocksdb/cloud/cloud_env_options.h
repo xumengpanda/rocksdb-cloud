@@ -320,13 +320,18 @@ class CloudEnv : public Env {
   Env* base_env_;  // The underlying env
 
   CloudEnv(const CloudEnvOptions& options, Env* base);
+  virtual const Env* FindInstance(const std::string& name) const;
 
  public:
+  static const std::string kAwsCloudName /* = "aws" */;
+  static const std::string kEnvCloudName /* = "cloud" */;
   virtual ~CloudEnv();
   // Returns the underlying env
-  Env* GetBaseEnv() { return base_env_; }
-  virtual const char* Name() const { return "cloud"; }
+  Env* GetBaseEnv() { return base_env_; 
+  }
 
+  virtual const char *Name() const;
+  
   std::shared_ptr<Logger> & GetInfoLogger() {
     return cloud_env_options.info_log;
   }
@@ -400,6 +405,18 @@ class CloudEnv : public Env {
   // an epoch during which that file was created.
   // Files both in S3 and in the local directory have this [epoch] suffix.
   virtual std::string RemapFilename(const std::string& logical_name) const = 0;
+
+  template <typename T>
+  const T* CastAs(const std::string& name) const {
+    const auto c = FindInstance(name);
+    return static_cast<const T*>(c);
+  }
+
+  template <typename T>
+  T* CastAs(const std::string& name) {
+    auto c = const_cast<Env*>(FindInstance(name));
+    return static_cast<T*>(c);
+  }
 
   // Create a new AWS env.
   // src_bucket_name: bucket name suffix where db data is read from

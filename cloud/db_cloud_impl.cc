@@ -92,8 +92,7 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
   if (!options.info_log) {
     CreateLoggerFromOptions(local_dbname, options, &options.info_log);
   }
-
-  CloudEnvImpl* cenv = static_cast<CloudEnvImpl*>(options.env);
+  CloudEnv *cenv = static_cast<CloudEnv*>(options.env);
   const CloudEnvOptions& copts = cenv->GetCloudEnvOptions();
   if (!copts.info_log) {
     (const_cast<CloudEnvOptions&>(copts)).info_log = options.info_log;
@@ -120,14 +119,16 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
     local_env->CreateDirIfMissing(
         local_dbname);  // MJR: TODO: Move into sanitize
   }
+  auto cimpl = cenv->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+  if (cimpl != nullptr) {
+    st = cimpl->SanitizeDirectory(options, local_dbname, read_only);
 
-  st = cenv->SanitizeDirectory(options, local_dbname, read_only);
-
-  if (st.ok()) {
-    st = cenv->LoadCloudManifest(local_dbname, read_only);
-  }
-  if (!st.ok()) {
-    return st;
+    if (st.ok()) {
+      st = cimpl->LoadCloudManifest(local_dbname, read_only);
+    }
+    if (!st.ok()) {
+      return st;
+    }
   }
   // If a persistent cache path is specified, then we set it in the options.
   if (!persistent_cache_path.empty() && persistent_cache_size_gb) {
@@ -198,7 +199,7 @@ Status DBCloudImpl::Savepoint() {
         "Savepoint could not get dbid %s", st.ToString().c_str());
     return st;
   }
-  CloudEnvImpl* cenv = static_cast<CloudEnvImpl*>(GetEnv());
+  CloudEnv* cenv = static_cast<CloudEnv*>(GetEnv());
 
   // If there is no destination bucket, then nothing to do
   if (!cenv->HasDestBucket()) {
@@ -282,7 +283,10 @@ Status DBCloudImpl::DoCheckpointToCloud(
     const BucketOptions& destination, const CheckpointToCloudOptions& options) {
   std::vector<std::string> live_files;
   uint64_t manifest_file_size{0};
-  auto cenv = static_cast<CloudEnvImpl*>(GetEnv());
+  auto cenv = static_cast<CloudEnv*>(GetEnv())->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+  if (cenv == nullptr) {
+    return Status::NotSupported("Checkpoint not supported by this environment");
+  }
   auto base_env = cenv->GetBaseEnv();
 
   auto st =
@@ -390,7 +394,7 @@ Status DBCloudImpl::DoCheckpointToCloud(
 Status DBCloudImpl::ExecuteRemoteCompactionRequest(
     const PluggableCompactionParam& inputParams,
     PluggableCompactionResult* result, bool doSanitize) {
-  auto cenv = static_cast<CloudEnvImpl*>(GetEnv());
+  auto cenv = static_cast<CloudEnv*>(GetEnv());
 
   // run the compaction request on the underlying local database
   Status status = GetBaseDB()->ExecuteRemoteCompactionRequest(

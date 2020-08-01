@@ -20,8 +20,11 @@ class CloudStorageReadableFile;
 //
 class CloudEnvImpl : public CloudEnv {
   friend class CloudEnv;
+ protected:
+  const Env* FindInstance(const std::string& name) const override;
 
  public:
+  static const std::string kImplCloudName /* = "cloud_impl" */;
   // Constructor
   CloudEnvImpl(const CloudEnvOptions& options, Env* base_env);
 
