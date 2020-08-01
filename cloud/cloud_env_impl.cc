@@ -852,8 +852,7 @@ Status CloudEnvImpl::LoadLocalCloudManifest(
 }
 
 std::string CloudEnvImpl::RemapFilename(const std::string& logical_path) const {
-  if (UNLIKELY(GetCloudType() == CloudType::kCloudNone) ||
-      UNLIKELY(test_disable_cloud_manifest_)) {
+  if (UNLIKELY(test_disable_cloud_manifest_)) {
     return logical_path;
   }
   auto file_name = basename(logical_path);
@@ -1437,55 +1436,49 @@ Status CloudEnvImpl::MaybeMigrateManifestFile(const std::string& local_dbname) {
 }
 
 Status CloudEnvImpl::PreloadCloudManifest(const std::string& local_dbname) {
-  Status st;
   Env* local_env = GetBaseEnv();
   local_env->CreateDirIfMissing(local_dbname);
-  if (GetCloudType() != CloudType::kCloudNone) {
-    st = MaybeMigrateManifestFile(local_dbname);
-    if (st.ok()) {
-      // Init cloud manifest
-      st = FetchCloudManifest(local_dbname, false);
-    }
-    if (st.ok()) {
-      // Inits CloudEnvImpl::cloud_manifest_, which will enable us to read files
-      // from the cloud
-      st = LoadLocalCloudManifest(local_dbname);
-    }
+  Status st = MaybeMigrateManifestFile(local_dbname);
+  if (st.ok()) {
+    // Init cloud manifest
+    st = FetchCloudManifest(local_dbname, false);
+  }
+  if (st.ok()) {
+    // Inits CloudEnvImpl::cloud_manifest_, which will enable us to read files
+    // from the cloud
+    st = LoadLocalCloudManifest(local_dbname);
   }
   return st;
 }
 
 Status CloudEnvImpl::LoadCloudManifest(const std::string& local_dbname,
                                        bool read_only) {
-  Status st;
-  if (GetCloudType() != CloudType::kCloudNone) {
-    st = MaybeMigrateManifestFile(local_dbname);
-    if (st.ok()) {
-      // Init cloud manifest
-      st = FetchCloudManifest(local_dbname, false);
-    }
-    if (st.ok()) {
-      // Inits CloudEnvImpl::cloud_manifest_, which will enable us to read files
-      // from the cloud
-      st = LoadLocalCloudManifest(local_dbname);
-    }
-    if (st.ok()) {
-      // Rolls the new epoch in CLOUDMANIFEST
-      st = RollNewEpoch(local_dbname);
-    }
+  Status st = MaybeMigrateManifestFile(local_dbname);
+  if (st.ok()) {
+    // Init cloud manifest
+    st = FetchCloudManifest(local_dbname, false);
+  }
+  if (st.ok()) {
+    // Inits CloudEnvImpl::cloud_manifest_, which will enable us to read files
+    // from the cloud
+    st = LoadLocalCloudManifest(local_dbname);
+  }
+  if (st.ok()) {
+    // Rolls the new epoch in CLOUDMANIFEST
+    st = RollNewEpoch(local_dbname);
+  }
+  if (!st.ok()) {
+    return st;
+  }
+  
+  // Do the cleanup, but don't fail if the cleanup fails.
+  if (!read_only) {
+    st = DeleteInvisibleFiles(local_dbname);
     if (!st.ok()) {
-      return st;
-    }
-
-    // Do the cleanup, but don't fail if the cleanup fails.
-    if (!read_only) {
-      st = DeleteInvisibleFiles(local_dbname);
-      if (!st.ok()) {
-        Log(InfoLogLevel::INFO_LEVEL, GetInfoLogger(),
-            "Failed to delete invisible files: %s", st.ToString().c_str());
-        // Ignore the fail
-        st = Status::OK();
-      }
+      Log(InfoLogLevel::INFO_LEVEL, GetInfoLogger(),
+          "Failed to delete invisible files: %s", st.ToString().c_str());
+      // Ignore the fail
+      st = Status::OK();
     }
   }
   return st;
@@ -1503,14 +1496,6 @@ Status CloudEnvImpl::SanitizeDirectory(const DBOptions& options,
   Env* env = GetBaseEnv();
   if (!read_only) {
     env->CreateDirIfMissing(local_name);
-  }
-
-  if (GetCloudType() == CloudType::kCloudNone) {
-    // We don't need to SanitizeDirectory()
-    Log(InfoLogLevel::INFO_LEVEL, GetInfoLogger(),
-        "[cloud_env_impl] SanitizeDirectory skipping dir %s for non-cloud env",
-        local_name.c_str());
-    return Status::OK();
   }
 
   // Shall we reinitialize the clone dir?

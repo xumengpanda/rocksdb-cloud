@@ -29,9 +29,6 @@ class CloudEnvImpl : public CloudEnv {
   CloudEnvImpl(const CloudEnvOptions& options, Env* base_env);
 
   virtual ~CloudEnvImpl();
-
-  const CloudType& GetCloudType() const { return cloud_env_options.cloud_type; }
-
   Status NewSequentialFile(const std::string& fname,
                            std::unique_ptr<SequentialFile>* result,
                            const EnvOptions& options) override;

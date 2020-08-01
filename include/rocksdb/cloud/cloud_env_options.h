@@ -24,15 +24,6 @@ class CloudEnv;
 class CloudLogController;
 class CloudStorageProvider;
 
-enum CloudType : unsigned char {
-  kCloudNone = 0x0,       // Not really a cloud env
-  kCloudAws = 0x1,        // AWS
-  kCloudGoogle = 0x2,     // Google
-  kCloudAzure = 0x3,      // Microsoft Azure
-  kCloudRackspace = 0x4,  // Rackspace
-  kCloudEnd = 0x5,
-};
-
 enum LogType : unsigned char {
   kLogNone = 0x0,  // Not really a log env
   // Important: Kinesis integration currently has a known issue and is not
@@ -123,8 +114,6 @@ struct CloudEnvOptions : public CloudOptions {
  public:
   BucketOptions src_bucket;
   BucketOptions dest_bucket;
-  // Specify the type of cloud-service to use.
-  CloudType cloud_type;
 
   // If keep_local_log_files is false, this specifies what service to use
   // for storage of write-ahead log.
@@ -256,7 +245,6 @@ struct CloudEnvOptions : public CloudOptions {
   bool skip_cloud_files_in_getchildren;
 
   CloudEnvOptions(
-      CloudType _cloud_type = CloudType::kCloudAws,
       LogType _log_type = LogType::kLogKafka,
       bool _keep_local_sst_files = false, bool _keep_local_log_files = true,
       uint64_t _purger_periodicity_millis = 10 * 60 * 1000,
@@ -270,8 +258,7 @@ struct CloudEnvOptions : public CloudOptions {
       int _number_objects_listed_in_one_iteration = 5000,
       int _constant_sst_file_size_in_sst_file_manager = -1,
       bool _skip_cloud_files_in_getchildren = false)
-  :     cloud_type(_cloud_type),
-        log_type(_log_type),
+  :     log_type(_log_type),
         keep_local_sst_files(_keep_local_sst_files),
         keep_local_log_files(_keep_local_log_files),
         purger_periodicity_millis(_purger_periodicity_millis),
