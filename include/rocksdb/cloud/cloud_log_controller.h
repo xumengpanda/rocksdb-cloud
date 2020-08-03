@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 
+#include "rocksdb/cloud/cloud_options.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -47,9 +48,22 @@ class CloudLogWritableFile : public WritableFile {
   Status status_;
 };
 
+struct CloudLogControllerOptions : public CloudOptions {};
+
 class CloudLogController {
  public:
+  static const std::string kControllerOpts /*= "cloudlog" */;
+  static const std::string kLogKafka /* = "kafka" */;
+  static const std::string kLogKinesis /* = "kinesis" */;
+
+  CloudLogController(const CloudLogControllerOptions& options);
   virtual ~CloudLogController();
+
+  static Status CreateLogController(
+      const std::string& name, std::shared_ptr<CloudLogController>* result);
+  static Status CreateLogController(
+      const std::string& name, const CloudLogControllerOptions& options,
+      std::shared_ptr<CloudLogController>* result);
 
   // Create a stream to store all log files.
   virtual Status CreateStream(const std::string& topic) = 0;
@@ -86,7 +100,20 @@ class CloudLogController {
   virtual Status GetFileSize(const std::string& logical_fname,
                              uint64_t* size) = 0;
   // Prepares/Initializes the log controller for the input cloud environment
+
   virtual Status Prepare(CloudEnv* env) = 0;
+  template <typename T>
+  const T* GetOptions(const std::string& name) const {
+    return reinterpret_cast<const T*>(GetOptionsPtr(name));
+  }
+  template <typename T>
+  T* GetOptions(const std::string& name) {
+    return reinterpret_cast<T*>(const_cast<void*>(GetOptionsPtr(name)));
+  }
+
+ protected:
+  CloudLogControllerOptions options_;
+  virtual const void* GetOptionsPtr(const std::string& name) const;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

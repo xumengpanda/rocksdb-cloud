@@ -75,16 +75,6 @@ class AwsCloudAccessCredentials {
   AwsAccessType type{AwsAccessType::kUndefined};
 };
 
-// Defines parameters required to connect to Kafka
-class KafkaLogOptions {
- public:
-  // The config parameters for the kafka client. At a bare minimum,
-  // there needs to be at least one entry in this map that lists the
-  // kafka brokers. That entry is of the type
-  //  ("metadata.broker.list", "kafka1.rockset.com,kafka2.rockset.com"
-  //
-  std::unordered_map<std::string, std::string> client_config_params;
-};
 
 enum class CloudRequestOpType {
   kReadOp,
@@ -124,9 +114,6 @@ struct CloudEnvOptions : public CloudOptions {
 
   // Access credentials
   AwsCloudAccessCredentials credentials;
-
-  // Only used if keep_local_log_files is true and log_type is kKafka.
-  KafkaLogOptions kafka_log_options;
 
   //
   // If true,  then sst files are stored locally and uploaded to the cloud in

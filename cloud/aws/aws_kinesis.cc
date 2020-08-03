@@ -180,12 +180,14 @@ Status KinesisWritableFile::LogDelete() {
 //
 class KinesisController : public CloudLogControllerImpl {
  public:
+  KinesisController(const CloudLogControllerOptions& options)
+      : CloudLogControllerImpl(options) {}
   virtual ~KinesisController() {
-    Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
         "[%s] KinesisController closed", Name());
   }
 
-  const char* Name() const override { return "kinesis"; }
+  const char* Name() const override { return kLogKinesis.c_str(); }
 
   Status CreateStream(const std::string& bucket) override;
   Status WaitForStreamReady(const std::string& bucket) override;
@@ -233,7 +235,7 @@ Status KinesisController::Initialize(CloudEnv* env) {
       std::string bucket = env->GetSrcBucketName();
       topic_ = Aws::String(bucket.c_str(), bucket.size());
 
-      Log(InfoLogLevel::INFO_LEVEL, env->GetInfoLogger(),
+      Log(InfoLogLevel::INFO_LEVEL, options_.info_log,
           "[%s] KinesisController opening stream %s using cachedir '%s'",
           Name(), topic_.c_str(), cache_dir_.c_str());
     }
@@ -244,8 +246,9 @@ Status KinesisController::Initialize(CloudEnv* env) {
 Status KinesisController::TailStream() {
   status_ = InitializeShards();
 
-  Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(), "[%s] TailStream topic %s %s",
-      Name(), topic_.c_str(), status_.ToString().c_str());
+  Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
+      "[%s] TailStream topic %s %s", Name(), topic_.c_str(),
+      status_.ToString().c_str());
 
   Status lastErrorStatus;
   int retryAttempt = 0;
@@ -269,13 +272,13 @@ Status KinesisController::TailStream() {
           outcome.GetError();
       Aws::Kinesis::KinesisErrors err = error.GetErrorType();
       if (err == Aws::Kinesis::KinesisErrors::EXPIRED_ITERATOR) {
-        Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+        Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
             "[%s] expired shard iterator for %s. Reseeking...", Name(),
             topic_.c_str());
         shards_iterator_[0] = "";
         SeekShards();  // read position at last seqno
       } else {
-        Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+        Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
             "[%s] error reading %s %s", Name(), topic_.c_str(),
             error.GetMessage().c_str());
         lastErrorStatus =
@@ -304,12 +307,12 @@ Status KinesisController::TailStream() {
       // apply the payload to local filesystem
       status_ = Apply(sl);
       if (!status_.ok()) {
-        Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+        Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
             "[%s] error processing message size %ld "
             "extracted from stream %s %s",
             Name(), b.GetLength(), topic_.c_str(), status_.ToString().c_str());
       } else {
-        Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+        Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
             "[%s] successfully processed message size %ld "
             "extracted from stream %s %s",
             Name(), b.GetLength(), topic_.c_str(), status_.ToString().c_str());
@@ -371,7 +374,7 @@ Status KinesisController::WaitForStreamReady(const std::string& bucket) {
       const Aws::Client::AWSError<Aws::Kinesis::KinesisErrors>& error =
           outcome.GetError();
       st = Status::IOError(topic.c_str(), error.GetMessage().c_str());
-      Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
           " Waiting for stream ready %s", st.ToString().c_str());
     } else {
       const Aws::Kinesis::Model::DescribeStreamResult& result =
@@ -413,7 +416,7 @@ Status KinesisController::InitializeShards() {
     const Aws::Client::AWSError<Aws::Kinesis::KinesisErrors>& error =
         outcome.GetError();
     st = Status::IOError(topic_.c_str(), error.GetMessage().c_str()),
-    Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
         "[%s] S3ReadableFile file %s Unable to find shards %s", Name(),
         topic_.c_str(), st.ToString().c_str());
   } else {
@@ -462,7 +465,7 @@ void KinesisController::SeekShards() {
       const Aws::Client::AWSError<Aws::Kinesis::KinesisErrors>& error =
           outcome.GetError();
       status_ = Status::IOError(topic_.c_str(), error.GetMessage().c_str());
-      Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
           "[%s] S3ReadableFile file %s Unable to find shards %s", Name(),
           topic_.c_str(), status_.ToString().c_str());
     } else {
@@ -486,14 +489,17 @@ CloudLogWritableFile* KinesisController::CreateWritableFile(
 
 namespace ROCKSDB_NAMESPACE {
 Status CloudLogControllerImpl::CreateKinesisController(
+    const CloudLogControllerOptions& options,
     std::shared_ptr<CloudLogController>* output) {
 #ifndef USE_AWS
+  (void)options;
   output->reset();
   return Status::NotSupported(
       "In order to use Kinesis, make sure you're compiling with "
       "USE_AWS=1");
 #else
-  output->reset(new ROCKSDB_NAMESPACE::cloud::kinesis::KinesisController());
+  output->reset(
+      new ROCKSDB_NAMESPACE::cloud::kinesis::KinesisController(options));
   return Status::OK();
 #endif /* USE_AWS */
 }

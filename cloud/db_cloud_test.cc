@@ -17,7 +17,9 @@
 #include "cloud/manifest_reader.h"
 #include "file/filename.h"
 #include "logging/logging.h"
+#include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
+#include "rocksdb/cloud/kafka_options.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
@@ -803,9 +805,14 @@ TEST_F(CloudTest, DirectReads) {
 #ifdef USE_KAFKA
 TEST_F(CloudTest, KeepLocalLogKafka) {
   cloud_env_options_.keep_local_log_files = false;
-  cloud_env_options_.log_type = LogType::kLogKafka;
-  cloud_env_options_.kafka_log_options
-      .client_config_params["metadata.broker.list"] = "localhost:9092";
+  ASSERT_OK(CloudLogController::CreateLogController(
+      CloudLogController::kLogKafka, &cloud_env_options_.cloud_log_controller));
+  auto kafka_options =
+      cloud_env_options_.cloud_log_controller->GetOptions<KafkaLogOptions>(
+          CloudLogController::kLogKafka);
+  ASSERT_NE(kafka_options, nullptr);
+  kafka_options->client_config_params["metadata.broker.list"] =
+      "localhost:9092";
 
   OpenDB();
 

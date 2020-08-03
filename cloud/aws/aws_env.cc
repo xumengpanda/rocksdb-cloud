@@ -336,10 +336,10 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
   if (status.ok() && !cloud_options.keep_local_log_files) {
     if (cloud_options.log_type == kLogKinesis) {
       status = CloudLogControllerImpl::CreateKinesisController(
-          &options.cloud_log_controller);
+          CloudLogControllerOptions(), &options.cloud_log_controller);
     } else if (cloud_options.log_type == kLogKafka) {
       status = CloudLogControllerImpl::CreateKafkaController(
-          &options.cloud_log_controller);
+          CloudLogControllerOptions(), &options.cloud_log_controller);
     } else {
       status =
           Status::NotSupported("We currently only support Kinesis and Kafka");

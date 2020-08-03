@@ -25,12 +25,14 @@ class CloudLogControllerImpl : public CloudLogController {
   static const uint32_t kDelete = 0x2;  // delete a log file
   static const uint32_t kClosed = 0x4;  // closing a file
 
-  CloudLogControllerImpl();
+  CloudLogControllerImpl(const CloudLogControllerOptions& options);
   virtual ~CloudLogControllerImpl();
   static Status CreateKinesisController(
-      CloudEnv* env, std::shared_ptr<CloudLogController>* result);
+      const CloudLogControllerOptions& options,
+      std::shared_ptr<CloudLogController>* result);
   static Status CreateKafkaController(
-      CloudEnv* env, std::shared_ptr<CloudLogController>* result);
+      const CloudLogControllerOptions& options,
+      std::shared_ptr<CloudLogController>* result);
 
   // Directory where files are cached locally.
   const std::string& GetCacheDir() const override { return cache_dir_; }

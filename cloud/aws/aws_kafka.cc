@@ -10,6 +10,7 @@
 
 #include "cloud/cloud_log_controller_impl.h"
 #include "rocksdb/cloud/cloud_env_options.h"
+#include "rocksdb/cloud/kafka_options.h"
 #include "rocksdb/status.h"
 #include "util/coding.h"
 #include "util/stderr_logger.h"
@@ -170,7 +171,13 @@ Status KafkaWritableFile::LogDelete() {
 // Intricacies of reading a Kafka stream
 //
 class KafkaController : public CloudLogControllerImpl {
+ protected:
+  const void* GetOptionsPtr(const std::string& name) const override;
+  KafkaLogOptions kafka_options_;
+
  public:
+  KafkaController(const CloudLogControllerOptions& options)
+      : CloudLogControllerImpl(options) {}
   ~KafkaController() {
     for (size_t i = 0; i < partitions_.size(); i++) {
       consumer_->stop(consumer_topic_.get(), partitions_[i]->partition());
@@ -180,7 +187,7 @@ class KafkaController : public CloudLogControllerImpl {
         "[%s] KafkaController closed.", Name());
   }
 
-  const char* Name() const override { return "kafka"; }
+  const char* Name() const override { return kLogKafka.c_str(); }
 
   virtual Status CreateStream(const std::string& /* bucket_prefix */) override {
     // Kafka client cannot create a topic. Topics are either manually created
@@ -216,14 +223,21 @@ class KafkaController : public CloudLogControllerImpl {
   std::vector<std::shared_ptr<RdKafka::TopicPartition>> partitions_;
 };
 
+const void* KafkaController::GetOptionsPtr(const std::string& name) const {
+  if (name == kLogKafka) {
+    return &kafka_options_;
+  } else {
+    return CloudLogControllerImpl::GetOptionsPtr(name);
+  }
+}
+
 Status KafkaController::Initialize(CloudEnv* env) {
   Status s = CloudLogControllerImpl::Initialize(env);
   if (!s.ok()) {
     return s;
   }
   std::string conf_errstr, producer_errstr, consumer_errstr;
-  const auto& kconf =
-      env->GetCloudEnvOptions().kafka_log_options.client_config_params;
+  const auto& kconf = kafka_options_.client_config_params;
   if (kconf.empty()) {
     return Status::InvalidArgument("No configs specified to kafka client");
   }
@@ -288,8 +302,9 @@ Status KafkaController::TailStream() {
     return status_;
   }
 
-  Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(), "[%s] TailStream topic %s %s",
-      Name(), consumer_topic_->name().c_str(), status_.ToString().c_str());
+  Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
+      "[%s] TailStream topic %s %s", Name(), consumer_topic_->name().c_str(),
+      status_.ToString().c_str());
 
   Status lastErrorStatus;
   int retryAttempt = 0;
@@ -311,13 +326,13 @@ Status KafkaController::TailStream() {
         // Apply the payload to local filesystem
         status_ = Apply(sl);
         if (!status_.ok()) {
-          Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+          Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
               "[%s] error processing message size %ld "
               "extracted from stream %s %s",
               Name(), message->len(), consumer_topic_->name().c_str(),
               status_.ToString().c_str());
         } else {
-          Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+          Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
               "[%s] successfully processed message size %ld "
               "extracted from stream %s %s",
               Name(), message->len(), consumer_topic_->name().c_str(),
@@ -338,7 +353,7 @@ Status KafkaController::TailStream() {
             Status::IOError(consumer_topic_->name().c_str(),
                             RdKafka::err2str(message->err()).c_str());
 
-        Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+        Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
             "[%s] error reading %s %s", Name(), consumer_topic_->name().c_str(),
             RdKafka::err2str(message->err()).c_str());
 
@@ -347,7 +362,7 @@ Status KafkaController::TailStream() {
       }
     }
   }
-  Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+  Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
       "[%s] TailStream topic %s finished: %s", Name(),
       consumer_topic_->name().c_str(), status_.ToString().c_str());
 
@@ -369,7 +384,7 @@ Status KafkaController::InitializePartitions() {
     status_ = Status::IOError(consumer_topic_->name().c_str(),
                               RdKafka::err2str(err).c_str());
 
-    Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
         "[%s] S3ReadableFile file %s Unable to find shards %s", Name(),
         consumer_topic_->name().c_str(), status_.ToString().c_str());
 
@@ -422,14 +437,16 @@ CloudLogWritableFile* KafkaController::CreateWritableFile(
 
 namespace ROCKSDB_NAMESPACE {
 Status CloudLogControllerImpl::CreateKafkaController(
+    const CloudLogControllerOptions& options,
     std::shared_ptr<CloudLogController>* output) {
 #ifndef USE_KAFKA
+  (void)options;
   output->reset();
   return Status::NotSupported(
       "In order to use Kafka, make sure you're compiling with "
       "USE_KAFKA=1");
 #else
-  output->reset(new ROCKSDB_NAMESPACE::cloud::kafka::KafkaController());
+  output->reset(new ROCKSDB_NAMESPACE::cloud::kafka::KafkaController(options));
   return Status::OK();
 #endif  // USE_KAFKA
 }
