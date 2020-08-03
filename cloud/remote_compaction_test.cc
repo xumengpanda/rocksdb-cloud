@@ -54,20 +54,18 @@ class RemoteCompactionTest : public testing::Test {
   }
 
   void Cleanup() {
-    ASSERT_TRUE(!aenv_);
+    ASSERT_TRUE(!cenv_);
 
     // check cloud credentials
     ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
 
-    CloudEnv* aenv;
-    // create a dummy aws env
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, &aenv));
-    aenv_.reset(aenv);
+    ASSERT_OK(CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, base_env_,
+                                       cloud_env_options_, &cenv_));
     // delete all pre-existing contents from the bucket
-    Status st = aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
-        aenv_->GetSrcBucketName(), "");
+    Status st = cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+        cenv_->GetSrcBucketName(), "");
     ASSERT_TRUE(st.ok() || st.IsNotFound());
-    aenv_.reset();
+    cenv_.reset();
 
     // delete and create directory where clones reside
     DestroyDir(clone_dir_);
@@ -76,7 +74,7 @@ class RemoteCompactionTest : public testing::Test {
 
   std::set<std::string> GetSSTFiles(std::string name) {
     std::vector<std::string> files;
-    aenv_->GetBaseEnv()->GetChildren(name, &files);
+    cenv_->GetBaseEnv()->GetChildren(name, &files);
     std::set<std::string> sst_files;
     for (auto& f : files) {
       if (IsSstFile(RemoveEpoch(f))) {
@@ -95,13 +93,14 @@ class RemoteCompactionTest : public testing::Test {
   virtual ~RemoteCompactionTest() { CloseDB(); }
 
   void CreateAwsEnv() {
-    CloudEnv* aenv;
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,
-                                  &aenv));
+    ASSERT_OK(CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, base_env_,
+                                       cloud_env_options_, &cenv_));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
-    ((AwsEnv*)aenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
-    aenv_.reset(aenv);
+    auto cimpl = cenv_->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (cimpl != nullptr) {
+      cimpl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    }
   }
 
   // Open database via the cloud interface
@@ -110,7 +109,7 @@ class RemoteCompactionTest : public testing::Test {
 
     // Create new AWS env
     CreateAwsEnv();
-    options_.env = aenv_.get();
+    options_.env = cenv_.get();
 
     // default column family
     ColumnFamilyOptions cfopt = options_;
@@ -143,7 +142,6 @@ class RemoteCompactionTest : public testing::Test {
                const std::string& dest_object_path,
                std::unique_ptr<DBCloud>* cloud_db,
                std::unique_ptr<CloudEnv>* cloud_env) {
-    CloudEnv* cenv;
     DBCloud* clone_db;
 
     // If there is no destination bucket, then the clone needs to copy
@@ -159,15 +157,17 @@ class RemoteCompactionTest : public testing::Test {
       copt.keep_local_sst_files = true;
     }
     // Create new AWS env
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, copt, &cenv));
-    // To catch any possible file deletion bugs, we set file deletion delay to
-    // smallest possible
-    ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    ASSERT_OK(CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, base_env_, copt,
+                                       cloud_env));
+    auto cimpl =
+        cloud_env->get()->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (cimpl != nullptr) {
+      // To catch any possible file deletion bugs, we set file deletion delay to
+      // smallest possible
+      cimpl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    }
     // sets the cloud env to be used by the env wrapper
-    options_.env = cenv;
-
-    // Returns the cloud env that was created
-    cloud_env->reset(cenv);
+    options_.env = cloud_env->get();
 
     // default column family
     ColumnFamilyOptions cfopt = options_;
@@ -208,8 +208,8 @@ class RemoteCompactionTest : public testing::Test {
 
   Status GetCloudLiveFilesSrc(std::set<uint64_t>* list) {
     std::unique_ptr<ManifestReader> manifest(new ManifestReader(
-        options_.info_log, aenv_.get(), aenv_->GetSrcBucketName()));
-    return manifest->GetLiveFiles(aenv_->GetSrcObjectPath(), list);
+        options_.info_log, cenv_.get(), cenv_->GetSrcBucketName()));
+    return manifest->GetLiveFiles(cenv_->GetSrcObjectPath(), list);
   }
 
   // Returns the DBImpl of the underlying rocksdb instance
@@ -326,7 +326,7 @@ class RemoteCompactionTest : public testing::Test {
   std::string persistent_cache_path_;
   uint64_t persistent_cache_size_gb_;
   DBCloud* db_;
-  std::unique_ptr<CloudEnv> aenv_;
+  std::unique_ptr<CloudEnv> cenv_;
   std::vector<ColumnFamilyHandle*> cf_handles_;
 };
 

@@ -124,53 +124,27 @@ const Env* CloudEnv::FindInstance(const std::string& name) const {
   } else {
     return nullptr;
   }
-}    
-Status CloudEnv::NewAwsEnv(
-    Env* base_env, const std::string& src_cloud_bucket,
-    const std::string& src_cloud_object, const std::string& src_cloud_region,
-    const std::string& dest_cloud_bucket, const std::string& dest_cloud_object,
-    const std::string& dest_cloud_region, const CloudEnvOptions& cloud_options,
-    CloudEnv** cenv) {
-  CloudEnvOptions options = cloud_options;
-  if (!src_cloud_bucket.empty())
-    options.src_bucket.SetBucketName(src_cloud_bucket);
-  if (!src_cloud_object.empty())
-    options.src_bucket.SetObjectPath(src_cloud_object);
-  if (!src_cloud_region.empty()) options.src_bucket.SetRegion(src_cloud_region);
-  if (!dest_cloud_bucket.empty())
-    options.dest_bucket.SetBucketName(dest_cloud_bucket);
-  if (!dest_cloud_object.empty())
-    options.dest_bucket.SetObjectPath(dest_cloud_object);
-  if (!dest_cloud_region.empty())
-    options.dest_bucket.SetRegion(dest_cloud_region);
-  return NewAwsEnv(base_env, options, cenv);
 }
 
-#ifndef USE_AWS
-Status CloudEnv::NewAwsEnv(Env* /*base_env*/,
-                           const CloudEnvOptions& /*options*/,
-                           CloudEnv** /*cenv*/) {
-  return Status::NotSupported("RocksDB Cloud not compiled with AWS support");
-}
-#else
-Status CloudEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& options,
-                           CloudEnv** cenv) {
+Status CloudEnv::CreateCloudEnv(const std::string& name, Env* base_env,
+                                const CloudEnvOptions& options,
+                                std::unique_ptr<CloudEnv>* result) {
+  Status st = Status::OK();
   // Dump out cloud env options
   options.Dump(options.info_log.get());
-
-  Status st = AwsEnv::NewAwsEnv(base_env, options, cenv);
+  if (name == kAwsCloudName) {
+    st = AwsEnv::NewAwsEnv(base_env, options, result);
+  } else {
+    return Status::NotSupported("Unknown Cloud Environment: ", name);
+  }
   if (st.ok()) {
-    // start the purge thread only if there is a destination bucket
-    if (options.dest_bucket.IsValid() && options.run_purger) {
-      CloudEnvImpl* impl = (*cenv)->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
-      if (impl != nullptr) {
-        impl->purge_thread_ = std::thread([impl] { impl->Purger(); });
-      }
+    auto impl =
+        result->get()->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (impl != nullptr) {
+      st = impl->Prepare();
     }
   }
   return st;
 }
-#endif
-
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // ROCKSDB_LITE

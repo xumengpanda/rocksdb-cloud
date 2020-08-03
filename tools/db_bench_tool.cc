@@ -29,7 +29,6 @@
 #include <thread>
 #include <unordered_map>
 
-#include "cloud/aws/aws_env.h"
 #include "db/db_impl/db_impl.h"
 #include "db/malloc_stats.h"
 #include "db/version_set.h"
@@ -40,6 +39,10 @@
 #include "port/port.h"
 #include "port/stack_trace.h"
 #include "rocksdb/cache.h"
+#ifdef USE_AWS
+#include "cloud/cloud_env_impl.h"
+#include "rocksdb/cloud/cloud_env_options.h"
+#endif
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/filter_policy.h"
@@ -1263,7 +1266,7 @@ enum RepFactory {
 
 // create Factory for creating S3 Envs
 #ifdef USE_AWS
-ROCKSDB_NAMESPACE::Env* CreateAwsEnv(
+ROCKSDB_NAMESPACE::Status CreateAwsEnv(
     const std::string& dbpath,
     std::unique_ptr<ROCKSDB_NAMESPACE::Env>* result) {
   fprintf(stderr, "Creating AwsEnv for path %s\n", dbpath.c_str());
@@ -1283,22 +1286,28 @@ ROCKSDB_NAMESPACE::Env* CreateAwsEnv(
   } else {
     coptions.TEST_Initialize("dbbench.", FLAGS_db, region);
   }
-  ROCKSDB_NAMESPACE::CloudEnv* s;
-  ROCKSDB_NAMESPACE::Status st = ROCKSDB_NAMESPACE::AwsEnv::NewAwsEnv(
-      ROCKSDB_NAMESPACE::Env::Default(), coptions, &s);
-  assert(st.ok());
-  ((ROCKSDB_NAMESPACE::CloudEnvImpl*)s)->TEST_DisableCloudManifest();
-  result->reset(s);
-  return s;
+  std::unique_ptr<ROCKSDB_NAMESPACE::CloudEnv> cenv;
+
+  ROCKSDB_NAMESPACE::Status st = ROCKSDB_NAMESPACE::CloudEnv::CreateCloudEnv(
+      ROCKSDB_NAMESPACE::CloudEnv::kAwsCloudName,
+      ROCKSDB_NAMESPACE::Env::Default(), coptions, &cenv);
+  if (st.ok()) {
+    auto cimpl = cenv->CastAs<ROCKSDB_NAMESPACE::CloudEnvImpl>(
+        ROCKSDB_NAMESPACE::CloudEnvImpl::kImplCloudName);
+    cimpl->TEST_DisableCloudManifest();
+    result->reset(cenv.release());
+  }
+  return st;
 }
 
 static const auto& s3_reg __attribute__((__unused__)) =
     ROCKSDB_NAMESPACE::ObjectLibrary::Default()
         -> Register<ROCKSDB_NAMESPACE::Env>(
-            "s3://.*", [](const std::string& uri,
-                          std::unique_ptr<ROCKSDB_NAMESPACE::Env>* guard,
-                          std::string*) {
-              CreateAwsEnv(uri, guard);
+            "s3://.*",
+            [](const std::string& uri,
+               std::unique_ptr<ROCKSDB_NAMESPACE::Env>* guard, std::string*) {
+              auto st = CreateAwsEnv(uri, guard);
+              assert(st.ok());
               return guard->get();
             });
 #endif /* USE_AWS */

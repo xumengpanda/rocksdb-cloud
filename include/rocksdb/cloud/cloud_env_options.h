@@ -111,7 +111,6 @@ class AwsCloudOptions {
 // Environent used for the cloud.
 //
 struct CloudEnvOptions : public CloudOptions {
- public:
   BucketOptions src_bucket;
   BucketOptions dest_bucket;
 
@@ -258,7 +257,7 @@ struct CloudEnvOptions : public CloudOptions {
       int _number_objects_listed_in_one_iteration = 5000,
       int _constant_sst_file_size_in_sst_file_manager = -1,
       bool _skip_cloud_files_in_getchildren = false)
-  :     log_type(_log_type),
+      : log_type(_log_type),
         keep_local_sst_files(_keep_local_sst_files),
         keep_local_log_files(_keep_local_log_files),
         purger_periodicity_millis(_purger_periodicity_millis),
@@ -313,6 +312,10 @@ class CloudEnv : public Env {
   static const std::string kAwsCloudName /* = "aws" */;
   static const std::string kEnvCloudName /* = "cloud" */;
   virtual ~CloudEnv();
+
+  static Status CreateCloudEnv(const std::string& name, Env* base_env,
+                               const CloudEnvOptions& options,
+                               std::unique_ptr<CloudEnv>* result);
   // Returns the underlying env
   Env* GetBaseEnv() { return base_env_; 
   }
@@ -404,28 +407,6 @@ class CloudEnv : public Env {
     auto c = const_cast<Env*>(FindInstance(name));
     return static_cast<T*>(c);
   }
-
-  // Create a new AWS env.
-  // src_bucket_name: bucket name suffix where db data is read from
-  // src_object_prefix: all db objects in source bucket are prepended with this
-  // dest_bucket_name: bucket name suffix where db data is written to
-  // dest_object_prefix: all db objects in destination bucket are prepended with
-  // this
-  //
-  // If src_bucket_name is empty, then the associated db does not read any
-  // data from cloud storage.
-  // If dest_bucket_name is empty, then the associated db does not write any
-  // data to cloud storage.
-  static Status NewAwsEnv(Env* base_env, const std::string& src_bucket_name,
-                          const std::string& src_object_prefix,
-                          const std::string& src_bucket_region,
-                          const std::string& dest_bucket_name,
-                          const std::string& dest_object_prefix,
-                          const std::string& dest_bucket_region,
-                          const CloudEnvOptions& env_options,
-                          CloudEnv** cenv);
-  static Status NewAwsEnv(Env* base_env, const CloudEnvOptions& env_options,
-                          CloudEnv** cenv);
 };
 
 }  // namespace ROCKSDB_NAMESPACE

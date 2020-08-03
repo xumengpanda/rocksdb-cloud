@@ -320,9 +320,7 @@ Status AwsEnv::UnlockFile(FileLock* /*lock*/) { return Status::OK(); }
 
 // The factory method for creating an S3 Env
 Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
-                         CloudEnv** cenv) {
-  Status status;
-  *cenv = nullptr;
+                         std::unique_ptr<CloudEnv>* cenv) {
   // If underlying env is not defined, then use PosixEnv
   if (!base_env) {
     base_env = Env::Default();
@@ -330,8 +328,11 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
   // These lines of code are likely temporary until the new configuration stuff
   // comes into play.
   CloudEnvOptions options = cloud_options;  // Make a copy
-  status =
-      CloudStorageProviderImpl::CreateS3Provider(&options.storage_provider);
+  Status status = Status::OK();
+  if (!options.storage_provider) {
+    status =
+        CloudStorageProviderImpl::CreateS3Provider(&options.storage_provider);
+  }
   if (status.ok() && !cloud_options.keep_local_log_files) {
     if (cloud_options.log_type == kLogKinesis) {
       status = CloudLogControllerImpl::CreateKinesisController(
@@ -353,11 +354,7 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
         status.ToString().c_str());
     return status;
   }
-  std::unique_ptr<AwsEnv> aenv(new AwsEnv(base_env, options));
-  status = aenv->Prepare();
-  if (status.ok()) {
-    *cenv = aenv.release();
-  }
+  cenv->reset(new AwsEnv(base_env, options));
   return status;
 }
 

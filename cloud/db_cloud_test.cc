@@ -32,7 +32,7 @@ namespace ROCKSDB_NAMESPACE {
 
 class CloudTest : public testing::Test {
  public:
-  CloudTest() {
+  CloudTest() : cname_(CloudEnv::kAwsCloudName) {
     Random64 rng(time(nullptr));
     test_id_ = std::to_string(rng.Next());
     fprintf(stderr, "Test ID: %s\n", test_id_.c_str());
@@ -57,20 +57,19 @@ class CloudTest : public testing::Test {
   }
 
   void Cleanup() {
-    ASSERT_TRUE(!aenv_);
+    ASSERT_TRUE(!cenv_);
 
     // check cloud credentials
     ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
 
-    CloudEnv* aenv;
     // create a dummy aws env
-    CloudEnv::NewAwsEnv(base_env_, cloud_env_options_,  &aenv);
-    aenv_.reset(aenv);
+    EXPECT_OK(CloudEnv::CreateCloudEnv(cname_, base_env_, cloud_env_options_,
+                                       &cenv_));
     // delete all pre-existing contents from the bucket
-    Status st = aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
-        aenv_->GetSrcBucketName(), dbname_);
+    Status st = cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+        cenv_->GetSrcBucketName(), dbname_);
     ASSERT_TRUE(st.ok() || st.IsNotFound());
-    aenv_.reset();
+    cenv_.reset();
 
     DestroyDir(clone_dir_);
     ASSERT_OK(base_env_->CreateDir(clone_dir_));
@@ -78,7 +77,7 @@ class CloudTest : public testing::Test {
 
   std::set<std::string> GetSSTFiles(std::string name) {
     std::vector<std::string> files;
-    aenv_->GetBaseEnv()->GetChildren(name, &files);
+    cenv_->GetBaseEnv()->GetChildren(name, &files);
     std::set<std::string> sst_files;
     for (auto& f : files) {
       if (IsSstFile(RemoveEpoch(f))) {
@@ -102,25 +101,27 @@ class CloudTest : public testing::Test {
   virtual ~CloudTest() {
     // Cleanup the cloud bucket
     if (!cloud_env_options_.src_bucket.GetBucketName().empty()) {
-      CloudEnv* aenv;
-      Status st = CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, &aenv);
+      std::unique_ptr<CloudEnv> cenv;
+      Status st = CloudEnv::CreateCloudEnv(cname_, base_env_,
+                                           cloud_env_options_, &cenv);
       if (st.ok()) {
-        aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
-            aenv->GetSrcBucketName(), dbname_);
-        delete aenv;
+        cenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+            cenv->GetSrcBucketName(), dbname_);
       }
     }
 
     CloseDB();
   }
 
-  void CreateAwsEnv() {
-    CloudEnv* aenv;
-    ASSERT_OK(CloudEnv::NewAwsEnv(base_env_, cloud_env_options_, &aenv));
+  void CreateCloudEnv() {
+    ASSERT_OK(CloudEnv::CreateCloudEnv(cname_, base_env_, cloud_env_options_,
+                                       &cenv_));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
-    ((AwsEnv*)aenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
-    aenv_.reset(aenv);
+    auto impl = cenv_->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (impl != nullptr) {
+      impl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    }
   }
 
   // Open database via the cloud interface
@@ -128,8 +129,8 @@ class CloudTest : public testing::Test {
     ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
 
     // Create new AWS env
-    CreateAwsEnv();
-    options_.env = aenv_.get();
+    CreateCloudEnv();
+    options_.env = cenv_.get();
 
     // Sleep for a second because S3 is eventual consistency.
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -163,7 +164,6 @@ class CloudTest : public testing::Test {
     // The local directory where the clone resides
     std::string cname = clone_dir_ + "/" + clone_name;
 
-    CloudEnv* cenv;
     DBCloud* clone_db;
 
     // If there is no destination bucket, then the clone needs to copy
@@ -180,19 +180,19 @@ class CloudTest : public testing::Test {
       copt.keep_local_sst_files = true;
     }
     // Create new AWS env
-    Status st = CloudEnv::NewAwsEnv(base_env_, copt, &cenv);
+    Status st = CloudEnv::CreateCloudEnv(cname_, base_env_, copt, cloud_env);
     if (!st.ok()) {
       return st;
     }
-
-    // To catch any possible file deletion bugs, we set file deletion delay to
-    // smallest possible
-    ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    auto impl =
+        cloud_env->get()->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (impl != nullptr) {
+      // To catch any possible file deletion bugs, we set file deletion delay to
+      // smallest possible
+      impl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    }
     // sets the cloud env to be used by the env wrapper
-    options_.env = cenv;
-
-    // Returns the cloud env that was created
-    cloud_env->reset(cenv);
+    options_.env = cloud_env->get();
 
     // default column family
     ColumnFamilyOptions cfopt = options_;
@@ -233,8 +233,8 @@ class CloudTest : public testing::Test {
 
   Status GetCloudLiveFilesSrc(std::set<uint64_t>* list) {
     std::unique_ptr<ManifestReader> manifest(new ManifestReader(
-        options_.info_log, aenv_.get(), aenv_->GetSrcBucketName()));
-    return manifest->GetLiveFiles(aenv_->GetSrcObjectPath(), list);
+        options_.info_log, cenv_.get(), cenv_->GetSrcBucketName()));
+    return manifest->GetLiveFiles(cenv_->GetSrcObjectPath(), list);
   }
 
   // Verify that local files are the same as cloud files in src bucket path
@@ -253,14 +253,14 @@ class CloudTest : public testing::Test {
 
     // loop through all the local files and validate
     for (std::string path : localFiles) {
-      std::string cpath = aenv_->GetSrcObjectPath() + "/" + path;
+      std::string cpath = cenv_->GetSrcObjectPath() + "/" + path;
       ASSERT_OK(
-          aenv_->GetCloudEnvOptions().storage_provider->GetCloudObjectSize(
-              aenv_->GetSrcBucketName(), cpath, &cloudSize));
+          cenv_->GetCloudEnvOptions().storage_provider->GetCloudObjectSize(
+              cenv_->GetSrcBucketName(), cpath, &cloudSize));
 
       // find the size of the file on local storage
       std::string lpath = dbname_ + "/" + path;
-      ASSERT_OK(aenv_->GetBaseEnv()->GetFileSize(lpath, &localSize));
+      ASSERT_OK(cenv_->GetBaseEnv()->GetFileSize(lpath, &localSize));
       ASSERT_TRUE(localSize == cloudSize);
       Log(options_.info_log, "local file %s size %" PRIu64 "\n", lpath.c_str(),
           localSize);
@@ -282,7 +282,8 @@ class CloudTest : public testing::Test {
   std::string persistent_cache_path_;
   uint64_t persistent_cache_size_gb_;
   DBCloud* db_;
-  std::unique_ptr<CloudEnv> aenv_;
+  std::unique_ptr<CloudEnv> cenv_;
+  const std::string cname_;
 };
 
 //
@@ -321,7 +322,7 @@ TEST_F(CloudTest, GetChildrenTest) {
   OpenDB();
 
   std::vector<std::string> children;
-  ASSERT_OK(aenv_->GetChildren(dbname_, &children));
+  ASSERT_OK(cenv_->GetChildren(dbname_, &children));
   int sst_files = 0;
   for (auto c : children) {
     if (IsSstFile(c)) {
@@ -513,22 +514,26 @@ TEST_F(CloudTest, TrueClone) {
     ASSERT_TRUE(value.compare("World") == 0);
 
     // Assert that there are no redundant sst files
-    CloudEnvImpl* env = static_cast<CloudEnvImpl*>(cloud_env.get());
-    std::vector<std::string> to_be_deleted;
-    ASSERT_OK(env->FindObsoleteFiles(env->GetSrcBucketName(), &to_be_deleted));
-    // TODO(igor): Re-enable once purger code is fixed
-    // ASSERT_EQ(to_be_deleted.size(), 0);
+    auto cimpl = cloud_env->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (cimpl != nullptr) {
+      std::vector<std::string> to_be_deleted;
+      ASSERT_OK(
+          cimpl->FindObsoleteFiles(cimpl->GetSrcBucketName(), &to_be_deleted));
+      // TODO(igor): Re-enable once purger code is fixed
+      // ASSERT_EQ(to_be_deleted.size(), 0);
 
-    // Assert that there are no redundant dbid
-    ASSERT_OK(env->FindObsoleteDbid(env->GetSrcBucketName(), &to_be_deleted));
-    // TODO(igor): Re-enable once purger code is fixed
-    // ASSERT_EQ(to_be_deleted.size(), 0);
+      // Assert that there are no redundant dbid
+      ASSERT_OK(
+          cimpl->FindObsoleteDbid(cimpl->GetSrcBucketName(), &to_be_deleted));
+      // TODO(igor): Re-enable once purger code is fixed
+      // ASSERT_EQ(to_be_deleted.size(), 0);
+    }
   }
 
-  aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
-      aenv_->GetSrcBucketName(), clone_path1);
-  aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
-      aenv_->GetSrcBucketName(), clone_path2);
+  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+      cenv_->GetSrcBucketName(), clone_path1);
+  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+      cenv_->GetSrcBucketName(), clone_path2);
 }
 
 //
@@ -544,7 +549,7 @@ TEST_F(CloudTest, DbidRegistry) {
 
   // Assert that there is one db in the registry
   DbidList dbs;
-  ASSERT_OK(aenv_->GetDbidList(aenv_->GetSrcBucketName(), &dbs));
+  ASSERT_OK(cenv_->GetDbidList(cenv_->GetSrcBucketName(), &dbs));
   ASSERT_GE(dbs.size(), 1);
 
   CloseDB();
@@ -590,14 +595,15 @@ TEST_F(CloudTest, CopyToFromS3) {
     // Create aws env
     cloud_env_options_.keep_local_sst_files = true;
     cloud_env_options_.use_aws_transfer_manager = iter == 1;
-    CreateAwsEnv();
-    ((CloudEnvImpl*)aenv_.get())->TEST_InitEmptyCloudManifest();
+    CreateCloudEnv();
+    auto impl = cenv_->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    impl->TEST_InitEmptyCloudManifest();
     char buffer[1 * 1024 * 1024];
 
     // create a 10 MB file and upload it to cloud
     {
       std::unique_ptr<WritableFile> writer;
-      ASSERT_OK(aenv_->NewWritableFile(fname, &writer, EnvOptions()));
+      ASSERT_OK(cenv_->NewWritableFile(fname, &writer, EnvOptions()));
 
       for (int i = 0; i < 10; i++) {
         ASSERT_OK(writer->Append(Slice(buffer, sizeof(buffer))));
@@ -611,7 +617,7 @@ TEST_F(CloudTest, CopyToFromS3) {
     // reopen file for reading. It should be refetched from cloud storage.
     {
       std::unique_ptr<RandomAccessFile> reader;
-      ASSERT_OK(aenv_->NewRandomAccessFile(fname, &reader, EnvOptions()));
+      ASSERT_OK(cenv_->NewRandomAccessFile(fname, &reader, EnvOptions()));
 
       uint64_t offset = 0;
       for (int i = 0; i < 10; i++) {
@@ -630,13 +636,13 @@ TEST_F(CloudTest, DelayFileDeletion) {
 
   // Create aws env
   cloud_env_options_.keep_local_sst_files = true;
-  CreateAwsEnv();
-  ((CloudEnvImpl*)aenv_.get())->TEST_InitEmptyCloudManifest();
-  ((AwsEnv*)aenv_.get())->TEST_SetFileDeletionDelay(std::chrono::seconds(2));
+  CreateCloudEnv();
+  ((CloudEnvImpl*)cenv_.get())->TEST_InitEmptyCloudManifest();
+  ((AwsEnv*)cenv_.get())->TEST_SetFileDeletionDelay(std::chrono::seconds(2));
 
   auto createFile = [&]() {
     std::unique_ptr<WritableFile> writer;
-    ASSERT_OK(aenv_->NewWritableFile(fname, &writer, EnvOptions()));
+    ASSERT_OK(cenv_->NewWritableFile(fname, &writer, EnvOptions()));
 
     for (int i = 0; i < 10; i++) {
       ASSERT_OK(writer->Append("igor"));
@@ -647,9 +653,9 @@ TEST_F(CloudTest, DelayFileDeletion) {
   for (int iter = 0; iter <= 1; ++iter) {
     createFile();
     // delete the file
-    ASSERT_OK(aenv_->DeleteFile(fname));
+    ASSERT_OK(cenv_->DeleteFile(fname));
     // file should still be there
-    ASSERT_OK(aenv_->FileExists(fname));
+    ASSERT_OK(cenv_->FileExists(fname));
 
     if (iter == 1) {
       // should prevent the deletion
@@ -657,7 +663,7 @@ TEST_F(CloudTest, DelayFileDeletion) {
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
-    auto st = aenv_->FileExists(fname);
+    auto st = cenv_->FileExists(fname);
     if (iter == 0) {
       // in iter==0 file should be deleted after 2 seconds
       ASSERT_TRUE(st.IsNotFound());
@@ -742,8 +748,8 @@ TEST_F(CloudTest, Savepoint) {
     ASSERT_OK(cloud_db->Get(ReadOptions(), "Hell", &value));
     ASSERT_TRUE(value.compare("Done") == 0);
   }
-  aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
-      aenv_->GetSrcBucketName(), dest_path);
+  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+      cenv_->GetSrcBucketName(), dest_path);
 }
 
 TEST_F(CloudTest, Encryption) {
@@ -808,19 +814,19 @@ TEST_F(CloudTest, KeepLocalLogKafka) {
   // Destroy DB in memory and on local file system.
   delete db_;
   db_ = nullptr;
-  aenv_.reset();
+  cenv_.reset();
   DestroyDir(dbname_);
   DestroyDir("/tmp/ROCKSET");
 
   // Create new env.
-  CreateAwsEnv();
+  CreateCloudEnv();
 
   // Give env enough time to consume WALs
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
   // Open DB.
   cloud_env_options_.keep_local_log_files = true;
-  options_.wal_dir = static_cast<AwsEnv*>(aenv_.get())->GetWALCacheDir();
+  options_.wal_dir = static_cast<AwsEnv*>(cenv_.get())->GetWALCacheDir();
   OpenDB();
 
   // Test read.
@@ -846,19 +852,19 @@ TEST_F(CloudTest, DISABLED_KeepLocalLogKinesis) {
   // Destroy DB in memory and on local file system.
   delete db_;
   db_ = nullptr;
-  aenv_.reset();
+  cenv_.reset();
   DestroyDir(dbname_);
   DestroyDir("/tmp/ROCKSET");
 
   // Create new env.
-  CreateAwsEnv();
+  CreateCloudEnv();
 
   // Give env enough time to consume WALs
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
   // Open DB.
   cloud_env_options_.keep_local_log_files = true;
-  options_.wal_dir = static_cast<AwsEnv*>(aenv_.get())->GetWALCacheDir();
+  options_.wal_dir = static_cast<AwsEnv*>(cenv_.get())->GetWALCacheDir();
   OpenDB();
 
   // Test read.
@@ -879,10 +885,10 @@ TEST_F(CloudTest, TwoDBsOneBucket) {
 
   OpenDB();
   auto firstManifestFile =
-      aenv_->GetDestObjectPath() + "/" +
-      ((CloudEnvImpl*)aenv_.get())->RemapFilename("MANIFEST-1");
-  EXPECT_OK(aenv_->GetCloudEnvOptions().storage_provider->ExistsCloudObject(
-      aenv_->GetDestBucketName(), firstManifestFile));
+      cenv_->GetDestObjectPath() + "/" +
+      ((CloudEnvImpl*)cenv_.get())->RemapFilename("MANIFEST-1");
+  EXPECT_OK(cenv_->GetCloudEnvOptions().storage_provider->ExistsCloudObject(
+      cenv_->GetDestBucketName(), firstManifestFile));
   // Create two files
   ASSERT_OK(db_->Put(WriteOptions(), "First", "File"));
   ASSERT_OK(db_->Flush(FlushOptions()));
@@ -944,9 +950,9 @@ TEST_F(CloudTest, TwoDBsOneBucket) {
   // so it might not be immediately deleted.
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_TRUE(
-      aenv_->GetCloudEnvOptions()
+      cenv_->GetCloudEnvOptions()
           .storage_provider
-          ->ExistsCloudObject(aenv_->GetDestBucketName(), firstManifestFile)
+          ->ExistsCloudObject(cenv_->GetDestBucketName(), firstManifestFile)
           .IsNotFound());
   CloseDB();
 }
@@ -967,23 +973,23 @@ TEST_F(CloudTest, TwoConcurrentWriters) {
     OpenDB();
     db1 = db_;
     db_ = nullptr;
-    aenv1 = aenv_.release();
+    aenv1 = cenv_.release();
   };
   auto openDB2 = [&] {
     dbname_ = secondDB;
     OpenDB();
     db2 = db_;
     db_ = nullptr;
-    aenv2 = aenv_.release();
+    aenv2 = cenv_.release();
   };
   auto closeDB1 = [&] {
     db_ = db1;
-    aenv_.reset(aenv1);
+    cenv_.reset(aenv1);
     CloseDB();
   };
   auto closeDB2 = [&] {
     db_ = db2;
-    aenv_.reset(aenv2);
+    cenv_.reset(aenv2);
     CloseDB();
   };
 
@@ -1114,7 +1120,7 @@ TEST_F(CloudTest, PreloadCloudManifest) {
   value.clear();
 
   // Reopen and validate, preload cloud manifest
-  aenv_->PreloadCloudManifest(dbname_);
+  cenv_->PreloadCloudManifest(dbname_);
 
   OpenDB();
   ASSERT_OK(db_->Get(ReadOptions(), "Hello", &value));
@@ -1243,14 +1249,13 @@ TEST_F(CloudTest, EphemeralOnCorruptedDB) {
 
   ASSERT_FALSE(manifest_file_name.empty());
 
-  // Delete MANIFEST file from S3 bucket.
+  // Delete MANIFEST file from the storage bucket.
   // This is to simulate the scenario where CLOUDMANIFEST is uploaded, but
   // MANIFEST is not yet uploaded from the durable shard.
-  auto aws_env = dynamic_cast<AwsEnv*>(aenv_.get());
-  ASSERT_TRUE(aws_env != nullptr);
-  aws_env->GetCloudEnvOptions().storage_provider->DeleteCloudObject(
-      aws_env->GetSrcBucketName(),
-      aws_env->GetSrcObjectPath() + "/" + manifest_file_name);
+  auto& storage_provider = cenv_->GetCloudEnvOptions().storage_provider;
+  storage_provider->DeleteCloudObject(
+      cenv_->GetSrcBucketName(),
+      cenv_->GetSrcObjectPath() + "/" + manifest_file_name);
 
   // Ephemeral clone should fail.
   std::unique_ptr<DBCloud> clone_db;
@@ -1259,9 +1264,9 @@ TEST_F(CloudTest, EphemeralOnCorruptedDB) {
   ASSERT_NOK(st);
 
   // Put the MANIFEST file back
-  aws_env->GetCloudEnvOptions().storage_provider->PutCloudObject(
-      dbname_ + "/" + manifest_file_name, aws_env->GetSrcBucketName(),
-      aws_env->GetSrcObjectPath() + "/" + manifest_file_name);
+  storage_provider->PutCloudObject(
+      dbname_ + "/" + manifest_file_name, cenv_->GetSrcBucketName(),
+      cenv_->GetSrcObjectPath() + "/" + manifest_file_name);
 
   // Try one more time. This time it should succeed.
   clone_db.reset();
@@ -1378,8 +1383,8 @@ TEST_F(CloudTest, CheckpointToCloud) {
   options_.level0_file_num_compaction_trigger = 100;  // never compact
 
   // Pre-create the bucket.
-  CreateAwsEnv();
-  aenv_.reset();
+  CreateCloudEnv();
+  cenv_.reset();
 
   // S3 is eventual consistency.
   std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -1414,13 +1419,13 @@ TEST_F(CloudTest, CheckpointToCloud) {
   ASSERT_EQ(value, "d");
   CloseDB();
 
-  aenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
       checkpoint_bucket.GetBucketName(), checkpoint_bucket.GetObjectPath());
 }
 
 // Basic test to copy object within S3.
 TEST_F(CloudTest, CopyObjectTest) {
-  CreateAwsEnv();
+  CreateCloudEnv();
 
   // We need to open an empty DB in order for epoch to work.
   OpenDB();
@@ -1431,20 +1436,20 @@ TEST_F(CloudTest, CopyObjectTest) {
 
   {
     std::unique_ptr<WritableFile> writableFile;
-    aenv_->NewWritableFile(fname, &writableFile, EnvOptions());
+    cenv_->NewWritableFile(fname, &writableFile, EnvOptions());
     writableFile->Append(content);
     writableFile->Fsync();
   }
 
-  Status st = aenv_->GetCloudEnvOptions().storage_provider->CopyCloudObject(
-      aenv_->GetSrcBucketName(), aenv_->RemapFilename(fname),
-      aenv_->GetSrcBucketName(), dst_fname);
+  Status st = cenv_->GetCloudEnvOptions().storage_provider->CopyCloudObject(
+      cenv_->GetSrcBucketName(), cenv_->RemapFilename(fname),
+      cenv_->GetSrcBucketName(), dst_fname);
   ASSERT_OK(st);
 
   {
     std::unique_ptr<CloudStorageReadableFile> readableFile;
-    st = aenv_->GetCloudEnvOptions().storage_provider->NewCloudReadableFile(
-        aenv_->GetSrcBucketName(), dst_fname, &readableFile, EnvOptions());
+    st = cenv_->GetCloudEnvOptions().storage_provider->NewCloudReadableFile(
+        cenv_->GetSrcBucketName(), dst_fname, &readableFile, EnvOptions());
     ASSERT_OK(st);
 
     char scratch[100];

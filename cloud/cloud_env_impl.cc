@@ -1470,7 +1470,7 @@ Status CloudEnvImpl::LoadCloudManifest(const std::string& local_dbname,
   if (!st.ok()) {
     return st;
   }
-  
+
   // Do the cleanup, but don't fail if the cleanup fails.
   if (!read_only) {
     st = DeleteInvisibleFiles(local_dbname);
@@ -1830,6 +1830,14 @@ Status CloudEnvImpl::Prepare() {
         s = Status::InvalidArgument(
             "Log controller required for remote log files");
       }
+    }
+  }
+  if (s.ok()) {
+    // start the purge thread only if there is a destination bucket
+    if (cloud_env_options.dest_bucket.IsValid() &&
+        cloud_env_options.run_purger) {
+      auto impl = this;
+      purge_thread_ = std::thread([impl] { impl->Purger(); });
     }
   }
   return s;

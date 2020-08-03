@@ -717,7 +717,7 @@ class DBTestBase : public testing::Test {
   int option_config_;
   Options last_options_;
 
-  Env* s3_env_;
+  std::unique_ptr<Env> cloud_env_;
 
   // Skip some options, as they may not be applicable to a specific test.
   // To add more skip constants, use values 4, 8, 16, etc.
@@ -734,7 +734,8 @@ class DBTestBase : public testing::Test {
   };
 
 #ifdef USE_AWS
-  Env* CreateNewAwsEnv(const std::string& pathPrefix, Env* env);
+  Status CreateNewAwsEnv(const std::string& pathPrefix, Env* parent,
+                         std::unique_ptr<Env>* env);
   std::shared_ptr<Logger> info_log_;
 #endif
 

@@ -57,8 +57,7 @@ DBTestBase::DBTestBase(const std::string path)
     : option_env_(kDefaultEnv),
       mem_env_(nullptr),
       encrypted_env_(nullptr),
-      option_config_(kDefault),
-      s3_env_(nullptr) {
+      option_config_(kDefault) {
   Env* base_env = Env::Default();
 #ifndef ROCKSDB_LITE
   const char* test_env_uri = getenv("TEST_ENV_URI");
@@ -89,7 +88,7 @@ DBTestBase::DBTestBase(const std::string path)
 
   env_->NewLogger(test::TmpDir(env_) + "/rocksdb-cloud.log", &info_log_);
   info_log_->SetInfoLogLevel(InfoLogLevel::DEBUG_LEVEL);
-  s3_env_ = CreateNewAwsEnv(mypath, env_);
+  CreateNewAwsEnv(mypath, env_, &cloud_env_);
 #endif
   env_->SetBackgroundThreads(1, Env::LOW);
   env_->SetBackgroundThreads(1, Env::HIGH);
@@ -128,11 +127,10 @@ DBTestBase::~DBTestBase() {
   delete env_;
 
 #ifdef USE_AWS
-  auto aenv = dynamic_cast<CloudEnv*>(s3_env_);
-  aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
-      aenv->GetSrcBucketName(), aenv->GetSrcObjectPath());
+  auto cenv = dynamic_cast<CloudEnv*>(cloud_env_.get());
+  cenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+      cenv->GetSrcBucketName(), cenv->GetSrcObjectPath());
 #endif
-  delete s3_env_;
 }
 
 bool DBTestBase::ShouldSkipOptions(int option_config, int skip_mask) {
@@ -619,8 +617,8 @@ Options DBTestBase::GetOptions(
     }
 #ifdef USE_AWS
     case kAwsEnv: {
-      assert(s3_env_);
-      options.env = s3_env_;
+      assert(cloud_env_);
+      options.env = cloud_env_.get();
       options.recycle_log_file_num = 0;  // do not reuse log files
       options.allow_mmap_reads = false;  // mmap is incompatible with S3
       break;
@@ -645,26 +643,35 @@ Options DBTestBase::GetOptions(
 }
 
 #ifdef USE_AWS
-Env* DBTestBase::CreateNewAwsEnv(const std::string& prefix, Env* parent) {
+Status DBTestBase::CreateNewAwsEnv(const std::string& prefix, Env* parent,
+                                   std::unique_ptr<Env>* result) {
   if (!prefix.empty()) {
     fprintf(stderr, "Creating new AWS env with prefix %s\n", prefix.c_str());
   }
 
   // get AWS credentials
   CloudEnvOptions coptions;
-  CloudEnv* cenv = nullptr;
   std::string region;
   coptions.info_log = info_log_;
   coptions.TEST_Initialize("dbtest.", prefix, region);
-  Status st = AwsEnv::NewAwsEnv(parent, coptions, &cenv);
-  ((CloudEnvImpl*)cenv)->TEST_DisableCloudManifest();
-  ((AwsEnv*)cenv)->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
-  ROCKS_LOG_INFO(info_log_, "Created new aws env with path %s", prefix.c_str());
+  std::unique_ptr<CloudEnv> cenv;
+  Status st = CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, parent,
+                                       coptions, &cenv);
+  if (st.ok()) {
+    auto impl = cenv->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    if (impl != nullptr) {
+      impl->TEST_DisableCloudManifest();
+      impl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+      ROCKS_LOG_INFO(info_log_, "Created new aws env with path %s",
+                     prefix.c_str());
+    }
+    result->reset(cenv.release());
+  }
   if (!st.ok()) {
     Log(InfoLogLevel::DEBUG_LEVEL, info_log_, "%s", st.ToString().c_str());
   }
-  assert(st.ok() && cenv);
-  return cenv;
+  assert(st.ok() && result->get() != nullptr);
+  return st;
 }
 #endif
 
@@ -748,15 +755,15 @@ void DBTestBase::Destroy(const Options& options, bool delete_cf_paths) {
   Close();
   ASSERT_OK(DestroyDB(dbname_, options, column_families));
 #ifdef USE_AWS
-  if (s3_env_) {
-    AwsEnv* aenv = static_cast<AwsEnv*>(s3_env_);
-    Status st = aenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
-        aenv->GetSrcBucketName(), dbname_);
+  if (cloud_env_) {
+    auto cenv = static_cast<CloudEnv*>(cloud_env_.get());
+    Status st = cenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+        cenv->GetSrcBucketName(), dbname_);
     ASSERT_TRUE(st.ok() || st.IsNotFound());
     for (int r = 0; r < 10; ++r) {
       // The existance is not propagated atomically in S3, so wait until
       // IDENTITY file no longer exists.
-      if (aenv->FileExists(dbname_ + "/IDENTITY").ok()) {
+      if (cenv->FileExists(dbname_ + "/IDENTITY").ok()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10 * (r + 1)));
         continue;
       }

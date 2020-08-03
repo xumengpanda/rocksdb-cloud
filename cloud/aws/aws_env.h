@@ -50,7 +50,7 @@ class AwsEnv : public CloudEnvImpl {
  public:
   // A factory method for creating S3 envs
   static Status NewAwsEnv(Env* env, const CloudEnvOptions& env_options,
-                          CloudEnv** cenv);
+                          std::unique_ptr<CloudEnv>* cenv);
 
   virtual ~AwsEnv() {}
 
