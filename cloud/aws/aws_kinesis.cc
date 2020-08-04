@@ -8,6 +8,7 @@
 #include <iostream>
 
 #include "cloud/cloud_log_controller_impl.h"
+#include "rocksdb/cloud/aws_options.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/status.h"
 #include "util/coding.h"
@@ -181,7 +182,10 @@ Status KinesisWritableFile::LogDelete() {
 class KinesisController : public CloudLogControllerImpl {
  public:
   KinesisController(const CloudLogControllerOptions& options)
-      : CloudLogControllerImpl(options) {}
+      : CloudLogControllerImpl(options) {
+    credentials_ = AwsCloudAccessCredentials::Default();
+  }
+
   virtual ~KinesisController() {
     Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
         "[%s] KinesisController closed", Name());
@@ -196,11 +200,24 @@ class KinesisController : public CloudLogControllerImpl {
   CloudLogWritableFile* CreateWritableFile(const std::string& fname,
                                            const EnvOptions& options) override;
 
+  void TEST_Initialize() override {
+    credentials_->TEST_Initialize();
+    CloudLogControllerImpl::TEST_Initialize();
+  }
+
  protected:
   Status Initialize(CloudEnv* env) override;
+  const void* GetOptionsPtr(const std::string& name) const override {
+    if (name == AwsCloudAccessCredentials::kAwsCredentials) {
+      return credentials_.get();
+    } else {
+      return CloudLogControllerImpl::GetOptionsPtr(name);
+    }
+  }
 
  private:
   std::shared_ptr<Aws::Kinesis::KinesisClient> kinesis_client_;
+  std::shared_ptr<AwsCloudAccessCredentials> credentials_;
 
   Aws::String topic_;
 
@@ -222,7 +239,7 @@ Status KinesisController::Initialize(CloudEnv* env) {
     Aws::Client::ClientConfiguration config;
     const auto& options = env->GetCloudEnvOptions();
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> provider;
-    st = options.credentials.GetCredentialsProvider(&provider);
+    st = credentials_->GetCredentialsProvider(&provider);
     if (st.ok()) {
       st = AwsCloudOptions::GetClientConfiguration(
           env, options.src_bucket.GetRegion(), &config);

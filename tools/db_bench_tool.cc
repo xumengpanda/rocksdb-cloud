@@ -41,6 +41,7 @@
 #include "rocksdb/cache.h"
 #ifdef USE_AWS
 #include "cloud/cloud_env_impl.h"
+#include "rocksdb/cloud/aws_options.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #endif
 #include "rocksdb/db.h"
@@ -1274,28 +1275,42 @@ ROCKSDB_NAMESPACE::Status CreateAwsEnv(
   coptions.info_log.reset(new ROCKSDB_NAMESPACE::StderrLogger(
       ROCKSDB_NAMESPACE::InfoLogLevel::WARN_LEVEL));
   std::string region;
-  if (FLAGS_aws_access_id.size() != 0) {
-    coptions.credentials.InitializeSimple(FLAGS_aws_access_id,
-                                          FLAGS_aws_secret_key);
-    region = FLAGS_aws_region;
+  ROCKSDB_NAMESPACE::Status st;
+  st = ROCKSDB_NAMESPACE::CloudStorageProvider::CreateProvider(
+      ROCKSDB_NAMESPACE::CloudStorageProvider::kProviderS3,
+      &coptions.storage_provider);
+  if (st.ok()) {
+    auto credentials =
+        coptions.storage_provider
+            ->GetOptions<ROCKSDB_NAMESPACE::AwsCloudAccessCredentials>(
+                ROCKSDB_NAMESPACE::AwsCloudAccessCredentials::kAwsCredentials);
+    assert(credentials != nullptr);
+    if (FLAGS_aws_access_id.size() != 0) {
+      credentials->InitializeSimple(FLAGS_aws_access_id, FLAGS_aws_secret_key);
+      region = FLAGS_aws_region;
+    }
+    assert(credentials->HasValid().ok());
   }
-  assert(coptions.credentials.HasValid().ok());
   coptions.keep_local_sst_files = FLAGS_keep_local_sst_files;
   if (FLAGS_db.empty()) {
     coptions.TEST_Initialize("dbbench.", "db-bench", region);
   } else {
     coptions.TEST_Initialize("dbbench.", FLAGS_db, region);
   }
-  std::unique_ptr<ROCKSDB_NAMESPACE::CloudEnv> cenv;
 
-  ROCKSDB_NAMESPACE::Status st = ROCKSDB_NAMESPACE::CloudEnv::CreateCloudEnv(
-      ROCKSDB_NAMESPACE::CloudEnv::kAwsCloudName,
-      ROCKSDB_NAMESPACE::Env::Default(), coptions, &cenv);
   if (st.ok()) {
-    auto cimpl = cenv->CastAs<ROCKSDB_NAMESPACE::CloudEnvImpl>(
-        ROCKSDB_NAMESPACE::CloudEnvImpl::kImplCloudName);
-    cimpl->TEST_DisableCloudManifest();
-    result->reset(cenv.release());
+    std::unique_ptr<ROCKSDB_NAMESPACE::CloudEnv> cenv;
+
+    st = ROCKSDB_NAMESPACE::CloudEnv::CreateCloudEnv(
+        ROCKSDB_NAMESPACE::CloudEnv::kAwsCloudName,
+        ROCKSDB_NAMESPACE::Env::Default(), coptions, &cenv);
+    if (st.ok()) {
+      auto cimpl = ROCKSDB_NAMESPACE::CloudEnvImpl::AsImpl(cenv.get());
+      if (cimpl != nullptr) {
+        cimpl->TEST_DisableCloudManifest();
+      }
+      result->reset(cenv.release());
+    }
   }
   return st;
 }

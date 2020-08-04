@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "cloud/cloud_constants.h"
 #include "cloud/cloud_log_controller_impl.h"
 #include "cloud/filename.h"
 #include "rocksdb/cloud/cloud_env_options.h"
@@ -55,9 +56,10 @@ Status CloudLogController::CreateLogController(
   }
 }
 
-const void* CloudLogController::GetOptionsPtr(const std::string& name) const {
-  if (name == kControllerOpts) {
-    return &options_;
+const CloudLogController* CloudLogController::FindInstance(
+    const std::string& name) const {
+  if (name == Name()) {
+    return this;
   } else {
     return nullptr;
   }
@@ -79,6 +81,21 @@ CloudLogControllerImpl::~CloudLogControllerImpl() {
       "[%s] CloudLogController closed.", Name());
 }
 
+CloudLogControllerImpl* CloudLogControllerImpl::AsImpl(
+    CloudLogController* controller) {
+  return controller->CastAs<CloudLogControllerImpl>(
+      CloudImplConstants::kImplName);
+}
+
+const CloudLogController* CloudLogControllerImpl::FindInstance(
+    const std::string& name) const {
+  if (name == CloudImplConstants::kImplName) {
+    return this;
+  } else {
+    return CloudLogController::FindInstance(name);
+  }
+}
+
 Status CloudLogControllerImpl::Initialize(CloudEnv* env) {
   env_ = env;
   // Create a random number for the cache directory.
@@ -97,6 +114,14 @@ Status CloudLogControllerImpl::Initialize(CloudEnv* env) {
     st = env_->GetBaseEnv()->CreateDirIfMissing(cache_dir_);
   }
   return st;
+}
+
+const void* CloudLogController::GetOptionsPtr(const std::string& name) const {
+  if (name == kControllerOpts) {
+    return &options_;
+  } else {
+    return nullptr;
+  }
 }
 
 Status CloudLogControllerImpl::Prepare(CloudEnv* env) {

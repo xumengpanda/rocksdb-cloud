@@ -13,6 +13,7 @@
 #include "rocksdb/env_encryption.h"
 #include "util/stderr_logger.h"
 #ifdef USE_AWS
+#include "cloud/cloud_constants.h"
 #include "cloud/cloud_env_impl.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #endif
@@ -658,7 +659,7 @@ Status DBTestBase::CreateNewAwsEnv(const std::string& prefix, Env* parent,
   Status st = CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, parent,
                                        coptions, &cenv);
   if (st.ok()) {
-    auto impl = cenv->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto impl = CloudEnvImpl::AsImpl(cenv.get());
     if (impl != nullptr) {
       impl->TEST_DisableCloudManifest();
       impl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));

@@ -111,8 +111,21 @@ class CloudLogController {
     return reinterpret_cast<T*>(const_cast<void*>(GetOptionsPtr(name)));
   }
 
+  template <typename T>
+  const T* CastAs(const std::string& name) const {
+    const auto c = FindInstance(name);
+    return static_cast<const T*>(c);
+  }
+
+  template <typename T>
+  T* CastAs(const std::string& name) {
+    auto c = const_cast<CloudLogController*>(FindInstance(name));
+    return static_cast<T*>(c);
+  }
+
  protected:
   CloudLogControllerOptions options_;
+  virtual const CloudLogController* FindInstance(const std::string& name) const;
   virtual const void* GetOptionsPtr(const std::string& name) const;
 };
 

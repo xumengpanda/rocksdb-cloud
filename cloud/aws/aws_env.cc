@@ -9,11 +9,11 @@
 #include <memory>
 #include <set>
 
-#include "cloud/cloud_log_controller_impl.h"
 #include "cloud/cloud_scheduler.h"
 #include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
 #include "port/port.h"
+#include "rocksdb/cloud/aws_options.h"
 #include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/env.h"
@@ -50,6 +50,16 @@ bool ParseEnum(const std::unordered_map<std::string, T>& type_map,
     return true;
   }
   return false;
+}
+
+const std::string AwsCloudAccessCredentials::kAwsCredentials =
+    "aws.credentials";
+
+const std::shared_ptr<AwsCloudAccessCredentials>&
+AwsCloudAccessCredentials::Default() {
+  static std::shared_ptr<AwsCloudAccessCredentials> Default =
+      std::make_shared<AwsCloudAccessCredentials>();
+  return Default;
 }
 
 AwsAccessType AwsCloudAccessCredentials::GetAccessType() const {
@@ -330,23 +340,8 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
   CloudEnvOptions options = cloud_options;  // Make a copy
   Status status = Status::OK();
   if (!options.storage_provider) {
-    status =
-        CloudStorageProviderImpl::CreateS3Provider(&options.storage_provider);
-  }
-  if (status.ok() && !cloud_options.keep_local_log_files) {
-    if (cloud_options.log_type == kLogKinesis) {
-      status = CloudLogControllerImpl::CreateKinesisController(
-          CloudLogControllerOptions(), &options.cloud_log_controller);
-    } else if (cloud_options.log_type == kLogKafka) {
-      status = CloudLogControllerImpl::CreateKafkaController(
-          CloudLogControllerOptions(), &options.cloud_log_controller);
-    } else {
-      status =
-          Status::NotSupported("We currently only support Kinesis and Kafka");
-      Log(InfoLogLevel::ERROR_LEVEL, options.info_log,
-          "[aws] NewAwsEnv Unknown log type %d. %s", cloud_options.log_type,
-          status.ToString().c_str());
-    }
+    status = CloudStorageProvider::CreateProvider(
+        CloudStorageProvider::kProviderS3, &options.storage_provider);
   }
   if (!status.ok()) {
     Log(InfoLogLevel::ERROR_LEVEL, options.info_log,

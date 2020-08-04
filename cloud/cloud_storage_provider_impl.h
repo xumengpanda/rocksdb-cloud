@@ -100,9 +100,11 @@ class CloudStorageWritableFileImpl : public CloudStorageWritableFile {
 //
 class CloudStorageProviderImpl : public CloudStorageProvider {
  public:
-  static Status CreateS3Provider(std::shared_ptr<CloudStorageProvider>* result);
+  static Status CreateS3Provider(const CloudStorageProviderOptions& options,
+                                 std::shared_ptr<CloudStorageProvider>* result);
 
-  CloudStorageProviderImpl();
+  static CloudStorageProviderImpl* AsImpl(CloudStorageProvider* provider);
+  CloudStorageProviderImpl(const CloudStorageProviderOptions& options);
   virtual ~CloudStorageProviderImpl();
   Status GetCloudObject(const std::string& bucket_name,
                         const std::string& object_path,
@@ -115,6 +117,11 @@ class CloudStorageProviderImpl : public CloudStorageProvider {
                               std::unique_ptr<CloudStorageReadableFile>* result,
                               const EnvOptions& options) override;
   virtual Status Prepare(CloudEnv* env) override;
+
+  // Method to allow tests to do default non-standard initialization
+  virtual void TEST_Initialize() {
+    // Do Nothing
+  }
 
  protected:
   Random64 rng_;
@@ -135,6 +142,9 @@ class CloudStorageProviderImpl : public CloudStorageProvider {
                                   const std::string& object_path,
                                   const std::string& bucket_name,
                                   uint64_t file_size) = 0;
+
+  const CloudStorageProvider* FindInstance(
+      const std::string& name) const override;
 
   CloudEnv* env_;
   Status status_;

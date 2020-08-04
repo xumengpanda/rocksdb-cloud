@@ -61,9 +61,6 @@ class CloudTest : public testing::Test {
   void Cleanup() {
     ASSERT_TRUE(!cenv_);
 
-    // check cloud credentials
-    ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
-
     // create a dummy aws env
     EXPECT_OK(CloudEnv::CreateCloudEnv(cname_, base_env_, cloud_env_options_,
                                        &cenv_));
@@ -120,7 +117,7 @@ class CloudTest : public testing::Test {
                                        &cenv_));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
-    auto impl = cenv_->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto impl = CloudEnvImpl::AsImpl(cenv_.get());
     if (impl != nullptr) {
       impl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
     }
@@ -128,8 +125,6 @@ class CloudTest : public testing::Test {
 
   // Open database via the cloud interface
   void OpenDB() {
-    ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
-
     // Create new AWS env
     CreateCloudEnv();
     options_.env = cenv_.get();
@@ -186,8 +181,7 @@ class CloudTest : public testing::Test {
     if (!st.ok()) {
       return st;
     }
-    auto impl =
-        cloud_env->get()->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto impl = CloudEnvImpl::AsImpl(cloud_env->get());
     if (impl != nullptr) {
       // To catch any possible file deletion bugs, we set file deletion delay to
       // smallest possible
@@ -516,7 +510,7 @@ TEST_F(CloudTest, TrueClone) {
     ASSERT_TRUE(value.compare("World") == 0);
 
     // Assert that there are no redundant sst files
-    auto cimpl = cloud_env->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto cimpl = CloudEnvImpl::AsImpl(cloud_env.get());
     if (cimpl != nullptr) {
       std::vector<std::string> to_be_deleted;
       ASSERT_OK(
@@ -598,7 +592,7 @@ TEST_F(CloudTest, CopyToFromS3) {
     cloud_env_options_.keep_local_sst_files = true;
     cloud_env_options_.use_aws_transfer_manager = iter == 1;
     CreateCloudEnv();
-    auto impl = cenv_->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto impl = CloudEnvImpl::AsImpl(cenv_.get());
     impl->TEST_InitEmptyCloudManifest();
     char buffer[1 * 1024 * 1024];
 
@@ -849,8 +843,9 @@ TEST_F(CloudTest, KeepLocalLogKafka) {
 // https://github.com/rockset/rocksdb-cloud/issues/35
 TEST_F(CloudTest, DISABLED_KeepLocalLogKinesis) {
   cloud_env_options_.keep_local_log_files = false;
-  cloud_env_options_.log_type = LogType::kLogKinesis;
-
+  ASSERT_OK(CloudLogController::CreateLogController(
+      CloudLogController::kLogKinesis,
+      &cloud_env_options_.cloud_log_controller));
   OpenDB();
 
   // Test write.

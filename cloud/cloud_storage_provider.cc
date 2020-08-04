@@ -7,6 +7,7 @@
 #include <mutex>
 #include <set>
 
+#include "cloud/cloud_constants.h"
 #include "cloud/cloud_env_impl.h"
 #include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
@@ -20,6 +21,8 @@
 #include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
+const std::string CloudStorageProvider::kProviderOpts = "cloud";
+const std::string CloudStorageProvider::kProviderS3 = "s3";
 
 /******************** Readablefile ******************/
 CloudStorageReadableFileImpl::CloudStorageReadableFileImpl(
@@ -235,7 +238,43 @@ Status CloudStorageWritableFileImpl::Sync() {
   return stat;
 }
 
+CloudStorageProvider::CloudStorageProvider(
+    const CloudStorageProviderOptions& options)
+    : options_(options) {}
+
 CloudStorageProvider::~CloudStorageProvider() {}
+
+Status CloudStorageProvider::CreateProvider(
+    const std::string& name, std::shared_ptr<CloudStorageProvider>* result) {
+  return CreateProvider(name, CloudStorageProviderOptions(), result);
+}
+
+Status CloudStorageProvider::CreateProvider(
+    const std::string& name, const CloudStorageProviderOptions& options,
+    std::shared_ptr<CloudStorageProvider>* result) {
+  if (name == kProviderS3) {
+    return CloudStorageProviderImpl::CreateS3Provider(options, result);
+  } else {
+    return Status::NotSupported("Unknown controller type: ", name);
+  }
+}
+
+const CloudStorageProvider* CloudStorageProvider::FindInstance(
+    const std::string& name) const {
+  if (name == Name()) {
+    return this;
+  } else {
+    return nullptr;
+  }
+}
+
+const void* CloudStorageProvider::GetOptionsPtr(const std::string& name) const {
+  if (name == kProviderOpts) {
+    return &options_;
+  } else {
+    return nullptr;
+  }
+}
 
 Status CloudStorageProvider::Prepare(CloudEnv* env) {
   Status st;
@@ -264,9 +303,26 @@ Status CloudStorageProvider::Prepare(CloudEnv* env) {
   return st;
 }
 
-CloudStorageProviderImpl::CloudStorageProviderImpl() : rng_(time(nullptr)) {}
+CloudStorageProviderImpl::CloudStorageProviderImpl(
+    const CloudStorageProviderOptions& opts)
+    : CloudStorageProvider(opts), rng_(time(nullptr)) {}
 
 CloudStorageProviderImpl::~CloudStorageProviderImpl() {}
+
+CloudStorageProviderImpl* CloudStorageProviderImpl::AsImpl(
+    CloudStorageProvider* provider) {
+  return provider->CastAs<CloudStorageProviderImpl>(
+      CloudImplConstants::kImplName);
+}
+
+const CloudStorageProvider* CloudStorageProviderImpl::FindInstance(
+    const std::string& name) const {
+  if (name == CloudImplConstants::kImplName) {
+    return this;
+  } else {
+    return CloudStorageProvider::FindInstance(name);
+  }
+}
 
 Status CloudStorageProviderImpl::Prepare(CloudEnv* env) {
   status_ = Initialize(env);

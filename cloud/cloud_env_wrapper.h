@@ -14,7 +14,9 @@ namespace ROCKSDB_NAMESPACE {
 
 class MockStorageProvider : public CloudStorageProvider {
  public:
-  MockStorageProvider() { notsup_ = Status::NotSupported(); }
+  MockStorageProvider() : CloudStorageProvider(CloudStorageProviderOptions()) {
+    notsup_ = Status::NotSupported();
+  }
   virtual const char* Name() const override { return "Mock"; }
   virtual Status CreateBucket(const std::string& /*bucket_name*/) override {
     return notsup_;

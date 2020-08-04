@@ -119,7 +119,7 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
     local_env->CreateDirIfMissing(
         local_dbname);  // MJR: TODO: Move into sanitize
   }
-  auto cimpl = cenv->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+  auto cimpl = CloudEnvImpl::AsImpl(cenv);
   if (cimpl != nullptr) {
     st = cimpl->SanitizeDirectory(options, local_dbname, read_only);
 
@@ -283,7 +283,7 @@ Status DBCloudImpl::DoCheckpointToCloud(
     const BucketOptions& destination, const CheckpointToCloudOptions& options) {
   std::vector<std::string> live_files;
   uint64_t manifest_file_size{0};
-  auto cenv = static_cast<CloudEnv*>(GetEnv())->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+  auto cenv = CloudEnvImpl::AsImpl(static_cast<CloudEnv*>(GetEnv()));
   if (cenv == nullptr) {
     return Status::NotSupported("Checkpoint not supported by this environment");
   }

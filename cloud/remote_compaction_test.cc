@@ -56,9 +56,6 @@ class RemoteCompactionTest : public testing::Test {
   void Cleanup() {
     ASSERT_TRUE(!cenv_);
 
-    // check cloud credentials
-    ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
-
     ASSERT_OK(CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, base_env_,
                                        cloud_env_options_, &cenv_));
     // delete all pre-existing contents from the bucket
@@ -97,7 +94,7 @@ class RemoteCompactionTest : public testing::Test {
                                        cloud_env_options_, &cenv_));
     // To catch any possible file deletion bugs, we set file deletion delay to
     // smallest possible
-    auto cimpl = cenv_->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto cimpl = CloudEnvImpl::AsImpl(cenv_.get());
     if (cimpl != nullptr) {
       cimpl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
     }
@@ -105,8 +102,6 @@ class RemoteCompactionTest : public testing::Test {
 
   // Open database via the cloud interface
   void OpenDB() {
-    ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
-
     // Create new AWS env
     CreateAwsEnv();
     options_.env = cenv_.get();
@@ -159,8 +154,7 @@ class RemoteCompactionTest : public testing::Test {
     // Create new AWS env
     ASSERT_OK(CloudEnv::CreateCloudEnv(CloudEnv::kAwsCloudName, base_env_, copt,
                                        cloud_env));
-    auto cimpl =
-        cloud_env->get()->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto cimpl = CloudEnvImpl::AsImpl(cloud_env->get());
     if (cimpl != nullptr) {
       // To catch any possible file deletion bugs, we set file deletion delay to
       // smallest possible

@@ -5,8 +5,11 @@
 
 #include <cinttypes>
 
+#include "cloud/cloud_constants.h"
 #include "cloud/cloud_env_wrapper.h"
+#include "cloud/cloud_log_controller_impl.h"
 #include "cloud/cloud_scheduler.h"
+#include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
 #include "env/composite_env_wrapper.h"
@@ -22,8 +25,6 @@
 #include "util/xxhash.h"
 
 namespace ROCKSDB_NAMESPACE {
-
-const std::string CloudEnvImpl::kImplCloudName = "cloud_impl";
 
 CloudEnvImpl::CloudEnvImpl(const CloudEnvOptions& opts, Env* base)
     : CloudEnv(opts, base), purger_is_running_(true) {
@@ -45,8 +46,12 @@ CloudEnvImpl::~CloudEnvImpl() {
   StopPurger();
 }
 
+CloudEnvImpl* CloudEnvImpl::AsImpl(CloudEnv* env) {
+  return env->CastAs<CloudEnvImpl>(CloudImplConstants::kImplName);
+}
+
 const Env* CloudEnvImpl::FindInstance(const std::string& name) const {
-  if (name == kImplCloudName) {
+  if (name == CloudImplConstants::kImplName) {
     return this;
   } else {
     return CloudEnv::FindInstance(name);
@@ -1841,6 +1846,23 @@ Status CloudEnvImpl::Prepare() {
     }
   }
   return s;
+}
+
+void CloudEnvImpl::TEST_Initialize() {
+  if (cloud_env_options.storage_provider) {
+    auto provider = CloudStorageProviderImpl::AsImpl(
+        cloud_env_options.storage_provider.get());
+    if (provider != nullptr) {
+      provider->TEST_Initialize();
+    }
+  }
+  if (cloud_env_options.cloud_log_controller) {
+    auto controller = CloudLogControllerImpl::AsImpl(
+        cloud_env_options.cloud_log_controller.get());
+    if (controller != nullptr) {
+      controller->TEST_Initialize();
+    }
+  }
 }
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // ROCKSDB_LITE

@@ -8,6 +8,7 @@
 #endif
 
 #include "cloud/aws/aws_env.h"
+#include "cloud/cloud_constants.h"
 #include "cloud/cloud_env_impl.h"
 #include "cloud/cloud_env_wrapper.h"
 #include "cloud/db_cloud_impl.h"
@@ -40,7 +41,6 @@ void CloudEnvOptions::TEST_Initialize(const std::string& bucket,
                                       const std::string& region) {
   src_bucket.TEST_Initialize(bucket, object, region);
   dest_bucket = src_bucket;
-  credentials.TEST_Initialize();
 }
 
 BucketOptions::BucketOptions() { prefix_ = "rockset."; }
@@ -132,15 +132,19 @@ Status CloudEnv::CreateCloudEnv(const std::string& name, Env* base_env,
   Status st = Status::OK();
   // Dump out cloud env options
   options.Dump(options.info_log.get());
-  if (name == kAwsCloudName) {
+  std::string id;
+  bool is_test = CloudImplConstants::IsTestId(name, &id);
+  if (id == kAwsCloudName) {
     st = AwsEnv::NewAwsEnv(base_env, options, result);
   } else {
     return Status::NotSupported("Unknown Cloud Environment: ", name);
   }
   if (st.ok()) {
-    auto impl =
-        result->get()->CastAs<CloudEnvImpl>(CloudEnvImpl::kImplCloudName);
+    auto impl = CloudEnvImpl::AsImpl(result->get());
     if (impl != nullptr) {
+      if (is_test) {
+        impl->TEST_Initialize();
+      }
       st = impl->Prepare();
     }
   }

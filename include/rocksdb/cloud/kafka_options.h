@@ -15,5 +15,5 @@ struct KafkaLogOptions {
   //
   std::unordered_map<std::string, std::string> client_config_params;
 };
-  
-} // namespace ROCKSDB_NAMESPACE
+
+}  // namespace ROCKSDB_NAMESPACE

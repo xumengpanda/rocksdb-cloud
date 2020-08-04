@@ -4,6 +4,7 @@
 
 #include <unordered_map>
 
+#include "rocksdb/cloud/cloud_options.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -44,8 +45,19 @@ struct CloudObjectInformation {
 // store.  Methods can create and empty buckets, as well as other
 // standard bucket object operations get/put/list/delete
 
+struct CloudStorageProviderOptions : public CloudOptions {};
+
 class CloudStorageProvider {
  public:
+  static const std::string kProviderOpts /*= "cloudlog" */;
+  static const std::string kProviderS3 /*= "s3" */;
+
+  CloudStorageProvider(const CloudStorageProviderOptions& options);
+  static Status CreateProvider(const std::string& name,
+                               std::shared_ptr<CloudStorageProvider>* result);
+  static Status CreateProvider(const std::string& name,
+                               const CloudStorageProviderOptions& options,
+                               std::shared_ptr<CloudStorageProvider>* result);
   virtual ~CloudStorageProvider();
   static const char* Type() { return "CloudStorageProvider"; }
   virtual const char* Name() const { return "cloud"; }
@@ -123,5 +135,31 @@ class CloudStorageProvider {
 
   // Prepares/Initializes the storage provider for the input cloud environment
   virtual Status Prepare(CloudEnv* env);
+  template <typename T>
+  const T* GetOptions(const std::string& name) const {
+    return reinterpret_cast<const T*>(GetOptionsPtr(name));
+  }
+  template <typename T>
+  T* GetOptions(const std::string& name) {
+    return reinterpret_cast<T*>(const_cast<void*>(GetOptionsPtr(name)));
+  }
+
+  template <typename T>
+  const T* CastAs(const std::string& name) const {
+    const auto c = FindInstance(name);
+    return static_cast<const T*>(c);
+  }
+
+  template <typename T>
+  T* CastAs(const std::string& name) {
+    auto c = const_cast<CloudStorageProvider*>(FindInstance(name));
+    return static_cast<T*>(c);
+  }
+
+ protected:
+  CloudStorageProviderOptions options_;
+  virtual const void* GetOptionsPtr(const std::string& name) const;
+  virtual const CloudStorageProvider* FindInstance(
+      const std::string& name) const;
 };
 }  // namespace ROCKSDB_NAMESPACE

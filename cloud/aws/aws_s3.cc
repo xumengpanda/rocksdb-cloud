@@ -45,6 +45,7 @@
 #include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
 #include "port/port.h"
+#include "rocksdb/cloud/aws_options.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/options.h"
@@ -361,8 +362,13 @@ class S3WritableFile : public CloudStorageWritableFileImpl {
 /******************** S3StorageProvider ******************/
 class S3StorageProvider : public CloudStorageProviderImpl {
  public:
+  S3StorageProvider(const CloudStorageProviderOptions& options)
+      : CloudStorageProviderImpl(options) {
+    credentials_ = AwsCloudAccessCredentials::Default();
+  }
+
   ~S3StorageProvider() override {}
-  virtual const char* Name() const override { return "s3"; }
+  virtual const char* Name() const override { return kProviderS3.c_str(); }
   Status CreateBucket(const std::string& bucket) override;
   Status ExistsBucket(const std::string& bucket) override;
   Status EmptyBucket(const std::string& bucket_name,
@@ -409,7 +415,20 @@ class S3StorageProvider : public CloudStorageProviderImpl {
                               std::unique_ptr<CloudStorageWritableFile>* result,
                               const EnvOptions& options) override;
 
+  void TEST_Initialize() override {
+    credentials_->TEST_Initialize();
+    CloudStorageProviderImpl::TEST_Initialize();
+  }
+
  protected:
+  const void* GetOptionsPtr(const std::string& name) const override {
+    if (name == AwsCloudAccessCredentials::kAwsCredentials) {
+      return credentials_.get();
+    } else {
+      return CloudStorageProviderImpl::GetOptionsPtr(name);
+    }
+  }
+
   Status Initialize(CloudEnv* env) override;
   Status DoGetCloudObject(const std::string& bucket_name,
                           const std::string& object_path,
@@ -430,6 +449,7 @@ class S3StorageProvider : public CloudStorageProviderImpl {
 
   // The S3 client
   std::shared_ptr<AwsS3ClientWrapper> s3client_;
+  std::shared_ptr<AwsCloudAccessCredentials> credentials_;
 };
 
 Status S3StorageProvider::Initialize(CloudEnv* env) {
@@ -457,7 +477,7 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
       env, cloud_opts.src_bucket.GetRegion(), &config);
   if (status.ok()) {
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> creds;
-    status = cloud_opts.credentials.GetCredentialsProvider(&creds);
+    status = credentials_->GetCredentialsProvider(&creds);
     if (!status.ok()) {
       Log(InfoLogLevel::INFO_LEVEL, env->GetInfoLogger(),
           "[aws] NewAwsEnv - Bad AWS credentials");
@@ -905,13 +925,15 @@ Status S3StorageProvider::DoPutCloudObject(const std::string& local_file,
 #endif /* USE_AWS */
 
 Status CloudStorageProviderImpl::CreateS3Provider(
+    const CloudStorageProviderOptions& options,
     std::shared_ptr<CloudStorageProvider>* provider) {
 #ifndef USE_AWS
+  (void)options;
   provider->reset();
   return Status::NotSupported(
       "In order to use S3, make sure you're compiling with USE_AWS=1");
 #else
-  provider->reset(new S3StorageProvider());
+  provider->reset(new S3StorageProvider(options));
   return Status::OK();
 #endif /* USE_AWS */
 }

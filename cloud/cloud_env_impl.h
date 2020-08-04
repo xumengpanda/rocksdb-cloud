@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 
+#include "cloud/cloud_constants.h"
 #include "cloud/cloud_manifest.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/env.h"
@@ -24,10 +25,9 @@ class CloudEnvImpl : public CloudEnv {
   const Env* FindInstance(const std::string& name) const override;
 
  public:
-  static const std::string kImplCloudName /* = "cloud_impl" */;
   // Constructor
   CloudEnvImpl(const CloudEnvOptions& options, Env* base_env);
-
+  static CloudEnvImpl* AsImpl(CloudEnv* env);
   virtual ~CloudEnvImpl();
   Status NewSequentialFile(const std::string& fname,
                            std::unique_ptr<SequentialFile>* result,
@@ -230,6 +230,8 @@ class CloudEnvImpl : public CloudEnv {
     std::lock_guard<std::mutex> lk(files_to_delete_mutex_);
     file_deletion_delay_ = delay;
   }
+
+  virtual void TEST_Initialize();
 
  protected:
   // Checks to see if the input fname exists in the dest or src bucket

@@ -24,58 +24,6 @@ class CloudEnv;
 class CloudLogController;
 class CloudStorageProvider;
 
-enum LogType : unsigned char {
-  kLogNone = 0x0,  // Not really a log env
-  // Important: Kinesis integration currently has a known issue and is not
-  // supported, see https://github.com/rockset/rocksdb-cloud/issues/35
-  kLogKinesis = 0x1,  // Kinesis
-  kLogKafka = 0x2,    // Kafka
-  kLogEnd = 0x3,
-};
-
-// Type of AWS access credentials
-enum class AwsAccessType {
-  kUndefined,  // Use AWS SDK's default credential chain
-  kSimple,
-  kInstance,
-  kTaskRole,
-  kEnvironment,
-  kConfig,
-  kAnonymous,
-};
-
-// Credentials needed to access AWS cloud service
-class AwsCloudAccessCredentials {
- public:
-  // functions to support AWS credentials
-  //
-  // Initialize AWS credentials using access_key_id and secret_key
-  void InitializeSimple(const std::string& aws_access_key_id,
-                        const std::string& aws_secret_key);
-  // Initialize AWS credentials using a config file
-  void InitializeConfig(const std::string& aws_config_file);
-  // Initialize credentials for tests (relies on config vars)
-  Status TEST_Initialize();
-
-  // test if valid AWS credentials are present
-  Status HasValid() const;
-  // Get AWSCredentialsProvider to supply to AWS API calls when required (e.g.
-  // to create S3Client)
-  Status GetCredentialsProvider(
-      std::shared_ptr<Aws::Auth::AWSCredentialsProvider>* result) const;
-
- private:
-  AwsAccessType GetAccessType() const;
-  Status CheckCredentials(const AwsAccessType& aws_type) const;
-
- public:
-  std::string access_key_id;
-  std::string secret_key;
-  std::string config_file;
-  AwsAccessType type{AwsAccessType::kUndefined};
-};
-
-
 enum class CloudRequestOpType {
   kReadOp,
   kWriteOp,
@@ -106,14 +54,10 @@ struct CloudEnvOptions : public CloudOptions {
 
   // If keep_local_log_files is false, this specifies what service to use
   // for storage of write-ahead log.
-  LogType log_type;
   std::shared_ptr<CloudLogController> cloud_log_controller;
 
   // Specifies the class responsible for writing objects to the cloud
   std::shared_ptr<CloudStorageProvider> storage_provider;
-
-  // Access credentials
-  AwsCloudAccessCredentials credentials;
 
   //
   // If true,  then sst files are stored locally and uploaded to the cloud in
@@ -231,7 +175,6 @@ struct CloudEnvOptions : public CloudOptions {
   bool skip_cloud_files_in_getchildren;
 
   CloudEnvOptions(
-      LogType _log_type = LogType::kLogKafka,
       bool _keep_local_sst_files = false, bool _keep_local_log_files = true,
       uint64_t _purger_periodicity_millis = 10 * 60 * 1000,
       bool _validate_filesize = true,
@@ -244,8 +187,7 @@ struct CloudEnvOptions : public CloudOptions {
       int _number_objects_listed_in_one_iteration = 5000,
       int _constant_sst_file_size_in_sst_file_manager = -1,
       bool _skip_cloud_files_in_getchildren = false)
-      : log_type(_log_type),
-        keep_local_sst_files(_keep_local_sst_files),
+      : keep_local_sst_files(_keep_local_sst_files),
         keep_local_log_files(_keep_local_log_files),
         purger_periodicity_millis(_purger_periodicity_millis),
         validate_filesize(_validate_filesize),

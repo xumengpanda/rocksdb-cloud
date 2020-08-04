@@ -16,10 +16,6 @@ class CloudLogControllerImpl : public CloudLogController {
   static constexpr const char* kCacheDir = "/tmp/ROCKSET";
   // Delay in Cloud Log stream: writes to read visibility
   static const std::chrono::microseconds kRetryPeriod;
-  static Status CreateKinesisController(
-      std::shared_ptr<CloudLogController>* result);
-  static Status CreateKafkaController(
-      std::shared_ptr<CloudLogController>* result);
 
   static const uint32_t kAppend = 0x1;  // add a new record to a logfile
   static const uint32_t kDelete = 0x2;  // delete a log file
@@ -33,6 +29,12 @@ class CloudLogControllerImpl : public CloudLogController {
   static Status CreateKafkaController(
       const CloudLogControllerOptions& options,
       std::shared_ptr<CloudLogController>* result);
+  static CloudLogControllerImpl* AsImpl(CloudLogController* controller);
+
+  // Method to allow tests to do default non-standard initialization
+  virtual void TEST_Initialize() {
+    // Do Nothing
+  }
 
   // Directory where files are cached locally.
   const std::string& GetCacheDir() const override { return cache_dir_; }
@@ -60,6 +62,9 @@ class CloudLogControllerImpl : public CloudLogController {
 
  protected:
   virtual Status Initialize(CloudEnv* env);
+  const CloudLogController* FindInstance(
+      const std::string& name) const override;
+
   // Converts an original pathname to a pathname in the cache.
   std::string GetCachePath(const Slice& original_pathname) const;
 
