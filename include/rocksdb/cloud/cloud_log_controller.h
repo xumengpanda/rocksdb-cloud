@@ -10,6 +10,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 class CloudEnv;
+class Logger;
 struct CloudEnvOptions;
 
 // Creates a new file, appends data to a file or delete an existing file via
@@ -48,7 +49,15 @@ class CloudLogWritableFile : public WritableFile {
   Status status_;
 };
 
-struct CloudLogControllerOptions : public CloudOptions {};
+struct CloudLogControllerOptions : public CloudOptions {
+  // request timeout for requests from the cloud storage. A value of 0
+  // means the default timeout assigned by the underlying cloud storage.
+  uint64_t request_timeout_ms = 600000;
+  
+  // connection timeout for requests from the cloud storage. A value of 0
+  // means the default timeout assigned by the underlying cloud storage.
+  uint64_t connect_timeout_ms = 30000;
+};
 
 class CloudLogController {
  public:
@@ -81,6 +90,9 @@ class CloudLogController {
 
   // Returns name of the cloud log type (Kinesis, etc.).
   virtual const char* Name() const { return "cloudlog"; }
+
+  // print out all options to the log
+  virtual void Dump(Logger* log) const;
 
   // Directory where files are cached locally.
   virtual const std::string& GetCacheDir() const = 0;

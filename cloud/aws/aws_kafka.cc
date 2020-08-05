@@ -183,7 +183,7 @@ class KafkaController : public CloudLogControllerImpl {
       consumer_->stop(consumer_topic_.get(), partitions_[i]->partition());
     }
 
-    Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
         "[%s] KafkaController closed.", Name());
   }
 

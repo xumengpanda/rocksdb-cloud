@@ -9,40 +9,11 @@
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
-namespace Aws {
-namespace Auth {
-class AWSCredentialsProvider;
-}  // namespace Auth
-namespace Client {
-struct ClientConfiguration;
-}  // namespace Client
-}  // namespace Aws
-
 namespace ROCKSDB_NAMESPACE {
 
 class CloudEnv;
 class CloudLogController;
 class CloudStorageProvider;
-
-enum class CloudRequestOpType {
-  kReadOp,
-  kWriteOp,
-  kListOp,
-  kCreateOp,
-  kDeleteOp,
-  kCopyOp,
-  kInfoOp
-};
-using CloudRequestCallback =
-    std::function<void(CloudRequestOpType, uint64_t, uint64_t, bool)>;
-
-
-class AwsCloudOptions {
- public:
-  static Status GetClientConfiguration(
-      CloudEnv* env, const std::string& region,
-      Aws::Client::ClientConfiguration* config);
-};
 
 //
 // The cloud environment for rocksdb. It allows configuring the rocksdb
@@ -90,29 +61,10 @@ struct CloudEnvOptions : public CloudOptions {
   // Default: true
   bool validate_filesize;
 
-  // if non-null, will be called *after* every cloud operation with some basic
-  // information about the operation. Use this to instrument your calls to the
-  // cloud.
-  // parameters: (op, size, latency in microseconds, is_success)
-  std::shared_ptr<CloudRequestCallback> cloud_request_callback;
-
-  // If true, enables server side encryption. If used with encryption_key_id in
-  // S3 mode uses AWS KMS. Otherwise, uses S3 server-side encryption where
-  // key is automatically created by Amazon.
-  // Default: false
-  bool server_side_encryption;
-
-  // If non-empty, uses the key ID for encryption.
-  // Default: empty
-  std::string encryption_key_id;
 
   // If false, it will not attempt to create cloud bucket if it doesn't exist.
   // Default: true
   bool create_bucket_if_missing;
-
-  // request timeout for requests from the cloud storage. A value of 0
-  // means the default timeout assigned by the underlying cloud storage.
-  uint64_t request_timeout_ms;
 
   // Use this to turn off the purger. You can do this if you don't use the clone
   // feature of RocksDB cloud
@@ -140,10 +92,6 @@ struct CloudEnvOptions : public CloudOptions {
   // Default: false
   bool skip_dbid_verification;
 
-  // If true, we will use AWS TransferManager instead of Put/Get operaations to
-  // download and upload S3 files.
-  // Default: false
-  bool use_aws_transfer_manager;
 
   // The number of object's metadata that are fetched in every iteration when
   // listing the results of a directory Default: 5000
@@ -178,12 +126,9 @@ struct CloudEnvOptions : public CloudOptions {
       bool _keep_local_sst_files = false, bool _keep_local_log_files = true,
       uint64_t _purger_periodicity_millis = 10 * 60 * 1000,
       bool _validate_filesize = true,
-      std::shared_ptr<CloudRequestCallback> _cloud_request_callback = nullptr,
-      bool _server_side_encryption = false, std::string _encryption_key_id = "",
-      bool _create_bucket_if_missing = true, uint64_t _request_timeout_ms = 0,
+      bool _create_bucket_if_missing = true, 
       bool _run_purger = false, bool _ephemeral_resync_on_open = false,
       bool _skip_dbid_verification = false,
-      bool _use_aws_transfer_manager = false,
       int _number_objects_listed_in_one_iteration = 5000,
       int _constant_sst_file_size_in_sst_file_manager = -1,
       bool _skip_cloud_files_in_getchildren = false)
@@ -191,15 +136,10 @@ struct CloudEnvOptions : public CloudOptions {
         keep_local_log_files(_keep_local_log_files),
         purger_periodicity_millis(_purger_periodicity_millis),
         validate_filesize(_validate_filesize),
-        cloud_request_callback(_cloud_request_callback),
-        server_side_encryption(_server_side_encryption),
-        encryption_key_id(std::move(_encryption_key_id)),
         create_bucket_if_missing(_create_bucket_if_missing),
-        request_timeout_ms(_request_timeout_ms),
         run_purger(_run_purger),
         ephemeral_resync_on_open(_ephemeral_resync_on_open),
         skip_dbid_verification(_skip_dbid_verification),
-        use_aws_transfer_manager(_use_aws_transfer_manager),
         number_objects_listed_in_one_iteration(
             _number_objects_listed_in_one_iteration),
         constant_sst_file_size_in_sst_file_manager(
@@ -244,6 +184,8 @@ class CloudEnv : public Env {
 
   static Status CreateCloudEnv(const std::string& name, Env* base_env,
                                const CloudEnvOptions& options,
+                               std::unique_ptr<CloudEnv>* result);
+  static Status CreateCloudEnv(const std::string& name, Env* base_env,
                                std::unique_ptr<CloudEnv>* result);
   // Returns the underlying env
   Env* GetBaseEnv() { return base_env_; 

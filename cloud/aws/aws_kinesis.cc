@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "cloud/aws/aws_client.h"
 #include "cloud/cloud_log_controller_impl.h"
 #include "rocksdb/cloud/aws_options.h"
 #include "rocksdb/cloud/cloud_env_options.h"
@@ -237,12 +238,13 @@ Status KinesisController::Initialize(CloudEnv* env) {
   Status st = CloudLogControllerImpl::Initialize(env);
   if (st.ok()) {
     Aws::Client::ClientConfiguration config;
-    const auto& options = env->GetCloudEnvOptions();
+    const auto& cloud_opts = env->GetCloudEnvOptions();
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> provider;
     st = credentials_->GetCredentialsProvider(&provider);
     if (st.ok()) {
-      st = AwsCloudOptions::GetClientConfiguration(
-          env, options.src_bucket.GetRegion(), &config);
+      st = AwsClientOptions::GetClientConfiguration(
+       options_.info_log, options_.connect_timeout_ms,
+       options_.request_timeout_ms, cloud_opts.src_bucket.GetRegion(), &config);
     }
     if (st.ok()) {
       kinesis_client_.reset(

@@ -64,4 +64,10 @@ class AwsCloudAccessCredentials {
   static const std::shared_ptr<AwsCloudAccessCredentials>& Default();
 };
 
+struct S3ProviderOptions {
+  // If true, we will use AWS TransferManager instead of Put/Get operaations to
+  // download and upload S3 files.
+  // Default: false
+  bool use_aws_transfer_manager = false;
+};
 } // namespace ROCKSDB_NAMESPACE

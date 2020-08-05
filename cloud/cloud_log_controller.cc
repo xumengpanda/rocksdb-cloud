@@ -98,6 +98,11 @@ const CloudLogController* CloudLogControllerImpl::FindInstance(
 
 Status CloudLogControllerImpl::Initialize(CloudEnv* env) {
   env_ = env;
+  // If no current logger, get the one from the environment
+  if (! options_.info_log) {
+    options_.info_log = env_->GetInfoLogger();
+  }
+
   // Create a random number for the cache directory.
   const std::string uid = trim(env_->GetBaseEnv()->GenerateUniqueId());
 
@@ -122,6 +127,10 @@ const void* CloudLogController::GetOptionsPtr(const std::string& name) const {
   } else {
     return nullptr;
   }
+}
+
+void CloudLogController::Dump(Logger *log) const {
+  Header(log, "                           COptions.log_type: %s", Name());
 }
 
 Status CloudLogControllerImpl::Prepare(CloudEnv* env) {

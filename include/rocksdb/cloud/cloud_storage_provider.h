@@ -41,11 +41,47 @@ struct CloudObjectInformation {
   std::unordered_map<std::string, std::string> metadata;
 };
 
+enum class CloudRequestOpType {
+  kReadOp,
+  kWriteOp,
+  kListOp,
+  kCreateOp,
+  kDeleteOp,
+  kCopyOp,
+  kInfoOp
+};
+using CloudRequestCallback =
+    std::function<void(CloudRequestOpType, uint64_t, uint64_t, bool)>;
+
 // A CloudStorageProvider provides the interface to the cloud object
 // store.  Methods can create and empty buckets, as well as other
 // standard bucket object operations get/put/list/delete
 
-struct CloudStorageProviderOptions : public CloudOptions {};
+struct CloudStorageProviderOptions : public CloudOptions {
+  // request timeout for requests from the cloud storage. A value of 0
+  // means the default timeout assigned by the underlying cloud storage.
+  uint64_t request_timeout_ms = 600000;
+  
+  // connection timeout for requests from the cloud storage. A value of 0
+  // means the default timeout assigned by the underlying cloud storage.
+  uint64_t connect_timeout_ms = 30000;
+
+  // If true, enables server side encryption. If used with encryption_key_id in
+  // S3 mode uses AWS KMS. Otherwise, uses S3 server-side encryption where
+  // key is automatically created by Amazon.
+  // Default: false
+  bool server_side_encryption;
+
+  // If non-empty, uses the key ID for encryption.
+  // Default: empty
+  std::string encryption_key_id;
+
+  // if non-null, will be called *after* every cloud operation with some basic
+  // information about the operation. Use this to instrument your calls to the
+  // cloud.
+  // parameters: (op, size, latency in microseconds, is_success)
+  std::shared_ptr<CloudRequestCallback> cloud_request_callback;
+};
 
 class CloudStorageProvider {
  public:
@@ -132,6 +168,9 @@ class CloudStorageProvider {
       const std::string& bucket, const std::string& fname,
       std::unique_ptr<CloudStorageReadableFile>* result,
       const EnvOptions& options) = 0;
+
+  // print out all options to the log
+  virtual void Dump(Logger* log) const;
 
   // Prepares/Initializes the storage provider for the input cloud environment
   virtual Status Prepare(CloudEnv* env);

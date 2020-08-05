@@ -259,6 +259,14 @@ Status CloudStorageProvider::CreateProvider(
   }
 }
 
+void CloudStorageProvider::Dump(Logger *log) const {
+  Header(log, "                         COptions.cloud_type: %s", Name());
+  Header(log, "             COptions.server_side_encryption: %d",
+         options_.server_side_encryption);
+  Header(log, "                  COptions.encryption_key_id: %s",
+         options_.encryption_key_id.c_str());
+}
+
 const CloudStorageProvider* CloudStorageProvider::FindInstance(
     const std::string& name) const {
   if (name == Name()) {
@@ -337,6 +345,10 @@ Status CloudStorageProviderImpl::Prepare(CloudEnv* env) {
 
 Status CloudStorageProviderImpl::Initialize(CloudEnv* env) {
   env_ = env;
+  // If no current logger, get the one from the environment
+  if (! options_.info_log) {
+    options_.info_log = env_->GetInfoLogger();
+  }
   return Status::OK();
 }
 

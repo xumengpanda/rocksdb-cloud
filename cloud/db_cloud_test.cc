@@ -17,6 +17,7 @@
 #include "cloud/manifest_reader.h"
 #include "file/filename.h"
 #include "logging/logging.h"
+#include "rocksdb/cloud/aws_options.h"
 #include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/cloud/kafka_options.h"
@@ -588,9 +589,14 @@ TEST_F(CloudTest, CopyToFromS3) {
   // iter 0 -- not using transfer manager
   // iter 1 -- using transfer manager
   for (int iter = 0; iter < 2; ++iter) {
+    ASSERT_OK(CloudStorageProvider::CreateProvider(CloudStorageProvider::kProviderS3,
+                                                   &cloud_env_options_.storage_provider));
+    auto s3options = cloud_env_options_.storage_provider->GetOptions<S3ProviderOptions>(CloudStorageProvider::kProviderS3);
+    ASSERT_NE(s3options, nullptr);
+    s3options->use_aws_transfer_manager = (iter == 1);
     // Create aws env
     cloud_env_options_.keep_local_sst_files = true;
-    cloud_env_options_.use_aws_transfer_manager = iter == 1;
+
     CreateCloudEnv();
     auto impl = CloudEnvImpl::AsImpl(cenv_.get());
     impl->TEST_InitEmptyCloudManifest();
@@ -749,14 +755,19 @@ TEST_F(CloudTest, Savepoint) {
 }
 
 TEST_F(CloudTest, Encryption) {
-  // Create aws env
-  cloud_env_options_.server_side_encryption = true;
+  CloudStorageProviderOptions provider_options;
+  provider_options.info_log = cloud_env_options_.info_log;
+  provider_options.server_side_encryption = true;
   char* key_id = getenv("AWS_KMS_KEY_ID");
   if (key_id != nullptr) {
-    cloud_env_options_.encryption_key_id = std::string(key_id);
+    provider_options.encryption_key_id = std::string(key_id);
     Log(options_.info_log, "Found encryption key id in env variable %s",
         key_id);
   }
+  ASSERT_OK(CloudStorageProvider::CreateProvider(CloudStorageProvider::kProviderS3,
+                                                 provider_options,
+                                                 &cloud_env_options_.storage_provider));
+  // Create aws env
 
   OpenDB();
 
@@ -807,11 +818,10 @@ TEST_F(CloudTest, KeepLocalLogKafka) {
   ASSERT_NE(kafka_options, nullptr);
   kafka_options->client_config_params["metadata.broker.list"] =
       "localhost:9092";
-
   OpenDB();
 
+  
   ASSERT_OK(db_->Put(WriteOptions(), "Franz", "Kafka"));
-
   // Destroy DB in memory and on local file system.
   delete db_;
   db_ = nullptr;

@@ -40,6 +40,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "cloud/aws/aws_client.h"
 #include "cloud/aws/aws_env.h"
 #include "cloud/aws/aws_file.h"
 #include "cloud/cloud_storage_provider_impl.h"
@@ -88,16 +89,16 @@ class CloudRequestCallbackGuard {
 };
 
 template <typename T>
-void SetEncryptionParameters(const CloudEnvOptions& cloud_env_options,
+void SetEncryptionParameters(const CloudStorageProviderOptions& cloud_options,
                              T& put_request) {
-  if (cloud_env_options.server_side_encryption) {
-    if (cloud_env_options.encryption_key_id.empty()) {
+  if (cloud_options.server_side_encryption) {
+    if (cloud_options.encryption_key_id.empty()) {
       put_request.SetServerSideEncryption(
           Aws::S3::Model::ServerSideEncryption::AES256);
     } else {
       put_request.SetServerSideEncryption(
           Aws::S3::Model::ServerSideEncryption::aws_kms);
-      put_request.SetSSEKMSKeyId(cloud_env_options.encryption_key_id.c_str());
+      put_request.SetSSEKMSKeyId(cloud_options.encryption_key_id.c_str());
     }
   }
 }
@@ -109,14 +110,15 @@ class AwsS3ClientWrapper {
   AwsS3ClientWrapper(
       const std::shared_ptr<Aws::Auth::AWSCredentialsProvider>& creds,
       const Aws::Client::ClientConfiguration& config,
-      const CloudEnvOptions& cloud_options)
+      const S3ProviderOptions& s3_options, 
+      const CloudStorageProviderOptions& cloud_options)
       : cloud_request_callback_(cloud_options.cloud_request_callback) {
     if (creds) {
       client_ = std::make_shared<Aws::S3::S3Client>(creds, config);
     } else {
       client_ = std::make_shared<Aws::S3::S3Client>(config);
     }
-    if (cloud_options.use_aws_transfer_manager) {
+    if (s3_options.use_aws_transfer_manager) {
       Aws::Transfer::TransferManagerConfiguration transferManagerConfig(
           GetAwsTransferManagerExecutor());
       transferManagerConfig.s3Client = client_;
@@ -420,9 +422,13 @@ class S3StorageProvider : public CloudStorageProviderImpl {
     CloudStorageProviderImpl::TEST_Initialize();
   }
 
+  void Dump(Logger* log) const override;
+
  protected:
   const void* GetOptionsPtr(const std::string& name) const override {
-    if (name == AwsCloudAccessCredentials::kAwsCredentials) {
+    if (name == CloudStorageProvider::kProviderS3) {
+      return &s3options_;
+    } else if (name == AwsCloudAccessCredentials::kAwsCredentials) {
       return credentials_.get();
     } else {
       return CloudStorageProviderImpl::GetOptionsPtr(name);
@@ -450,8 +456,15 @@ class S3StorageProvider : public CloudStorageProviderImpl {
   // The S3 client
   std::shared_ptr<AwsS3ClientWrapper> s3client_;
   std::shared_ptr<AwsCloudAccessCredentials> credentials_;
+  S3ProviderOptions s3options_;
 };
 
+void S3StorageProvider::Dump(Logger* log) const {
+  CloudStorageProviderImpl::Dump(log);
+  Header(log, "           COptions.use_aws_transfer_manager: %s",
+         s3options_.use_aws_transfer_manager ? "true" : "false");
+}
+  
 Status S3StorageProvider::Initialize(CloudEnv* env) {
   Status status = CloudStorageProviderImpl::Initialize(env);
   if (!status.ok()) {
@@ -462,7 +475,7 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
   if (!env->SrcMatchesDest() && env->HasSrcBucket() && env->HasDestBucket()) {
     if (cloud_opts.src_bucket.GetRegion() !=
         cloud_opts.dest_bucket.GetRegion()) {
-      Log(InfoLogLevel::ERROR_LEVEL, env->GetInfoLogger(),
+      Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
           "[aws] NewAwsEnv Buckets %s, %s in two different regions %s, %s "
           "is not supported",
           cloud_opts.src_bucket.GetBucketName().c_str(),
@@ -473,19 +486,20 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
     }
   }
   Aws::Client::ClientConfiguration config;
-  status = AwsCloudOptions::GetClientConfiguration(
-      env, cloud_opts.src_bucket.GetRegion(), &config);
+  status = AwsClientOptions::GetClientConfiguration(
+       options_.info_log, options_.connect_timeout_ms,
+       options_.request_timeout_ms, cloud_opts.src_bucket.GetRegion(), &config);
   if (status.ok()) {
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> creds;
     status = credentials_->GetCredentialsProvider(&creds);
     if (!status.ok()) {
-      Log(InfoLogLevel::INFO_LEVEL, env->GetInfoLogger(),
+      Log(InfoLogLevel::INFO_LEVEL, options_.info_log,
           "[aws] NewAwsEnv - Bad AWS credentials");
     } else {
-      Header(env->GetInfoLogger(), "S3 connection to endpoint in region: %s",
+      Header(options_.info_log, "S3 connection to endpoint in region: %s",
              config.region.c_str());
       s3client_ =
-          std::make_shared<AwsS3ClientWrapper>(creds, config, cloud_opts);
+        std::make_shared<AwsS3ClientWrapper>(creds, config, s3options_, options_);
     }
   }
   return status;
@@ -554,12 +568,12 @@ Status S3StorageProvider::EmptyBucket(const std::string& bucket_name,
   // Get all the objects in the  bucket
   Status st = ListCloudObjects(bucket_name, object_path, &results);
   if (!st.ok()) {
-    Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
         "[s3] EmptyBucket unable to find objects in bucket %s %s",
         bucket_name.c_str(), st.ToString().c_str());
     return st;
   }
-  Log(InfoLogLevel::DEBUG_LEVEL, env_->GetInfoLogger(),
+  Log(InfoLogLevel::DEBUG_LEVEL, options_.info_log,
       "[s3] EmptyBucket going to delete %" ROCKSDB_PRIszt
       " objects in bucket %s",
       results.size(), bucket_name.c_str());
@@ -568,7 +582,7 @@ Status S3StorageProvider::EmptyBucket(const std::string& bucket_name,
   for (auto path : results) {
     st = DeleteCloudObject(bucket_name, path);
     if (!st.ok()) {
-      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
           "[s3] EmptyBucket Unable to delete %s in bucket %s %s", path.c_str(),
           bucket_name.c_str(), st.ToString().c_str());
     }
@@ -599,7 +613,7 @@ Status S3StorageProvider::DeleteCloudObject(const std::string& bucket_name,
     }
   }
 
-  Log(InfoLogLevel::INFO_LEVEL, env_->GetInfoLogger(),
+  Log(InfoLogLevel::INFO_LEVEL, options_.info_log,
       "[s3] DeleteFromS3 %s/%s, status %s", bucket_name.c_str(),
       object_path.c_str(), st.ToString().c_str());
 
@@ -640,7 +654,7 @@ Status S3StorageProvider::ListCloudObjects(const std::string& bucket_name,
           outcome.GetError();
       std::string errmsg(error.GetMessage().c_str());
       if (IsNotFound(error.GetErrorType())) {
-        Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+        Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
             "[s3] GetChildren dir %s does not exist: %s", object_path.c_str(),
             errmsg.c_str());
         return Status::NotFound(object_path, errmsg.c_str());
@@ -717,14 +731,14 @@ Status S3StorageProvider::PutCloudObjectMetadata(
   request.SetBucket(ToAwsString(bucket_name));
   request.SetKey(ToAwsString(object_path));
   request.SetMetadata(aws_metadata);
-  SetEncryptionParameters(env_->GetCloudEnvOptions(), request);
+  SetEncryptionParameters(options_, request);
 
   auto outcome = s3client_->PutCloudObject(request);
   bool isSuccess = outcome.IsSuccess();
   if (!isSuccess) {
     const auto& error = outcome.GetError();
     std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-    Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
         "[s3] Bucket %s error in saving metadata %s", bucket_name.c_str(),
         errmsg.c_str());
     return Status::IOError(object_path, errmsg.c_str());
@@ -737,7 +751,7 @@ Status S3StorageProvider::DoNewCloudReadableFile(
     const std::string& content_hash,
     std::unique_ptr<CloudStorageReadableFile>* result,
     const EnvOptions& /*options*/) {
-  result->reset(new S3ReadableFile(s3client_, env_->GetInfoLogger(), bucket, fname,
+  result->reset(new S3ReadableFile(s3client_, options_.info_log, bucket, fname,
                                    fsize, content_hash));
   return Status::OK();
 }
@@ -809,7 +823,7 @@ Status S3StorageProvider::CopyCloudObject(const std::string& bucket_name_src,
   request.SetCopySource(src_url);
   request.SetBucket(dest_bucket);
   request.SetKey(dest_object);
-  SetEncryptionParameters(env_->GetCloudEnvOptions(), request);
+  SetEncryptionParameters(options_, request);
 
   // execute request
   Aws::S3::Model::CopyObjectOutcome outcome =
@@ -818,12 +832,12 @@ Status S3StorageProvider::CopyCloudObject(const std::string& bucket_name_src,
   if (!isSuccess) {
     const Aws::Client::AWSError<Aws::S3::S3Errors>& error = outcome.GetError();
     std::string errmsg(error.GetMessage().c_str());
-    Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+    Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
         "[s3] S3WritableFile src path %s error in copying to %s %s",
         src_url.c_str(), dest_object.c_str(), errmsg.c_str());
     return Status::IOError(dest_object.c_str(), errmsg.c_str());
   }
-  Log(InfoLogLevel::INFO_LEVEL, env_->GetInfoLogger(),
+  Log(InfoLogLevel::INFO_LEVEL, options_.info_log,
       "[s3] S3WritableFile src path %s copied to %s %s", src_url.c_str(),
       dest_object.c_str(), st.ToString().c_str());
   return st;
@@ -844,7 +858,7 @@ Status S3StorageProvider::DoGetCloudObject(const std::string& bucket_name,
     } else {
       const auto& error = handle->GetLastError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
           "[s3] DownloadFile %s/%s error %s.", bucket_name.c_str(),
           object_path.c_str(), errmsg.c_str());
       if (IsNotFound(error.GetErrorType())) {
@@ -867,7 +881,7 @@ Status S3StorageProvider::DoGetCloudObject(const std::string& bucket_name,
     } else {
       const auto& error = outcome.GetError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
           "[s3] GetObject %s/%s error %s.", bucket_name.c_str(),
           object_path.c_str(), errmsg.c_str());
       if (IsNotFound(error.GetErrorType())) {
@@ -890,7 +904,7 @@ Status S3StorageProvider::DoPutCloudObject(const std::string& local_file,
     if (handle->GetStatus() != Aws::Transfer::TransferStatus::COMPLETED) {
       auto error = handle->GetLastError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
           "[s3] UploadFile %s/%s, size %" PRIu64 ", ERROR %s",
           bucket_name.c_str(), object_path.c_str(), file_size, errmsg.c_str());
       return Status::IOError(local_file, errmsg);
@@ -904,19 +918,19 @@ Status S3StorageProvider::DoPutCloudObject(const std::string& local_file,
     putRequest.SetBucket(ToAwsString(bucket_name));
     putRequest.SetKey(ToAwsString(object_path));
     putRequest.SetBody(inputData);
-    SetEncryptionParameters(env_->GetCloudEnvOptions(), putRequest);
+    SetEncryptionParameters(options_, putRequest);
 
     auto outcome = s3client_->PutCloudObject(putRequest, file_size);
     if (!outcome.IsSuccess()) {
       auto error = outcome.GetError();
       std::string errmsg(error.GetMessage().c_str(), error.GetMessage().size());
-      Log(InfoLogLevel::ERROR_LEVEL, env_->GetInfoLogger(),
+      Log(InfoLogLevel::ERROR_LEVEL, options_.info_log,
           "[s3] PutCloudObject %s/%s, size %" PRIu64 ", ERROR %s",
           bucket_name.c_str(), object_path.c_str(), file_size, errmsg.c_str());
       return Status::IOError(local_file, errmsg);
     }
   }
-  Log(InfoLogLevel::INFO_LEVEL, env_->GetInfoLogger(),
+  Log(InfoLogLevel::INFO_LEVEL, options_.info_log,
       "[s3] PutCloudObject %s/%s, size %" PRIu64 ", OK", bucket_name.c_str(),
       object_path.c_str(), file_size);
   return Status::OK();
