@@ -107,10 +107,7 @@ class MockStorageProvider : public CloudStorageProvider {
 class MockCloudEnv : public CloudEnv {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
-  explicit MockCloudEnv(const CloudEnvOptions& opts = CloudEnvOptions())
-      : CloudEnv(opts, Env::Default()) {
-    notsup_ = Status::NotSupported();
-  }
+  explicit MockCloudEnv(const CloudEnvOptions& opts = CloudEnvOptions());
 
   virtual ~MockCloudEnv() {}
 

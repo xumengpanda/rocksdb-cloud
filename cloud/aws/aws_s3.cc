@@ -940,7 +940,7 @@ Status S3StorageProvider::DoPutCloudObject(const std::string& local_file,
 
 Status CloudStorageProviderImpl::CreateS3Provider(
     const CloudStorageProviderOptions& options,
-    std::shared_ptr<CloudStorageProvider>* provider) {
+    std::unique_ptr<CloudStorageProvider>* provider) {
 #ifndef USE_AWS
   (void)options;
   provider->reset();

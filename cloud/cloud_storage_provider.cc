@@ -245,13 +245,13 @@ CloudStorageProvider::CloudStorageProvider(
 CloudStorageProvider::~CloudStorageProvider() {}
 
 Status CloudStorageProvider::CreateProvider(
-    const std::string& name, std::shared_ptr<CloudStorageProvider>* result) {
+    const std::string& name, std::unique_ptr<CloudStorageProvider>* result) {
   return CreateProvider(name, CloudStorageProviderOptions(), result);
 }
 
 Status CloudStorageProvider::CreateProvider(
     const std::string& name, const CloudStorageProviderOptions& options,
-    std::shared_ptr<CloudStorageProvider>* result) {
+    std::unique_ptr<CloudStorageProvider>* result) {
   if (name == kProviderS3) {
     return CloudStorageProviderImpl::CreateS3Provider(options, result);
   } else {

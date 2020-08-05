@@ -25,29 +25,5 @@ bool CloudImplConstants::IsTestId(const std::string& name, std::string* id) {
     return false;
   }
 }
-
-void CloudEnvOptions::Dump(Logger* log) const {
-  if (storage_provider) {
-    storage_provider->Dump(log);
-  }
-  if (cloud_log_controller) {
-    cloud_log_controller->Dump(log);
-  }
-  Header(log, "               COptions.keep_local_sst_files: %d",
-         keep_local_sst_files);
-  Header(log, "               COptions.keep_local_log_files: %d",
-         keep_local_log_files);
-  Header(log, "           COptions.create_bucket_if_missing: %s",
-         create_bucket_if_missing ? "true" : "false");
-  Header(log, "                         COptions.run_purger: %s",
-         run_purger ? "true" : "false");
-  Header(log, "           COptions.ephemeral_resync_on_open: %s",
-         ephemeral_resync_on_open ? "true" : "false");
-  Header(log, "             COptions.skip_dbid_verification: %s",
-         skip_dbid_verification ? "true" : "false");
-  Header(log, "           COptions.number_objects_listed_in_one_iteration: %d",
-         number_objects_listed_in_one_iteration);
-}
-
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // ROCKSDB_LITE

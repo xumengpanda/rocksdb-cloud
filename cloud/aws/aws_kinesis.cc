@@ -509,7 +509,7 @@ CloudLogWritableFile* KinesisController::CreateWritableFile(
 namespace ROCKSDB_NAMESPACE {
 Status CloudLogControllerImpl::CreateKinesisController(
     const CloudLogControllerOptions& options,
-    std::shared_ptr<CloudLogController>* output) {
+    std::unique_ptr<CloudLogController>* output) {
 #ifndef USE_AWS
   (void)options;
   output->reset();

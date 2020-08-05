@@ -90,10 +90,10 @@ class CloudStorageProvider {
 
   CloudStorageProvider(const CloudStorageProviderOptions& options);
   static Status CreateProvider(const std::string& name,
-                               std::shared_ptr<CloudStorageProvider>* result);
+                               std::unique_ptr<CloudStorageProvider>* result);
   static Status CreateProvider(const std::string& name,
                                const CloudStorageProviderOptions& options,
-                               std::shared_ptr<CloudStorageProvider>* result);
+                               std::unique_ptr<CloudStorageProvider>* result);
   virtual ~CloudStorageProvider();
   static const char* Type() { return "CloudStorageProvider"; }
   virtual const char* Name() const { return "cloud"; }

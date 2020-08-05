@@ -1276,12 +1276,13 @@ ROCKSDB_NAMESPACE::Status CreateAwsEnv(
       ROCKSDB_NAMESPACE::InfoLogLevel::WARN_LEVEL));
   std::string region;
   ROCKSDB_NAMESPACE::Status st;
+  std::unique_ptr<ROCKSDB_NAMESPACE::CloudStorageProvider> storage_provider;
   st = ROCKSDB_NAMESPACE::CloudStorageProvider::CreateProvider(
       ROCKSDB_NAMESPACE::CloudStorageProvider::kProviderS3,
-      &coptions.storage_provider);
+      &storage_provider);
   if (st.ok()) {
     auto credentials =
-        coptions.storage_provider
+        storage_provider
             ->GetOptions<ROCKSDB_NAMESPACE::AwsCloudAccessCredentials>(
                 ROCKSDB_NAMESPACE::AwsCloudAccessCredentials::kAwsCredentials);
     assert(credentials != nullptr);
@@ -1303,7 +1304,7 @@ ROCKSDB_NAMESPACE::Status CreateAwsEnv(
 
     st = ROCKSDB_NAMESPACE::CloudEnv::CreateCloudEnv(
         ROCKSDB_NAMESPACE::CloudEnv::kAwsCloudName,
-        ROCKSDB_NAMESPACE::Env::Default(), coptions, &cenv);
+        ROCKSDB_NAMESPACE::Env::Default(), coptions, std::move(storage_provider), nullptr, &cenv);
     if (st.ok()) {
       auto cimpl = ROCKSDB_NAMESPACE::CloudEnvImpl::AsImpl(cenv.get());
       if (cimpl != nullptr) {

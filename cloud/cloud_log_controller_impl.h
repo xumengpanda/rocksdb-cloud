@@ -25,10 +25,10 @@ class CloudLogControllerImpl : public CloudLogController {
   virtual ~CloudLogControllerImpl();
   static Status CreateKinesisController(
       const CloudLogControllerOptions& options,
-      std::shared_ptr<CloudLogController>* result);
+      std::unique_ptr<CloudLogController>* result);
   static Status CreateKafkaController(
       const CloudLogControllerOptions& options,
-      std::shared_ptr<CloudLogController>* result);
+      std::unique_ptr<CloudLogController>* result);
   static CloudLogControllerImpl* AsImpl(CloudLogController* controller);
 
   // Method to allow tests to do default non-standard initialization

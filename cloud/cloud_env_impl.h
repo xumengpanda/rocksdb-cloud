@@ -26,7 +26,9 @@ class CloudEnvImpl : public CloudEnv {
 
  public:
   // Constructor
-  CloudEnvImpl(const CloudEnvOptions& options, Env* base_env);
+  CloudEnvImpl(Env* base_env, const CloudEnvOptions& options,
+               std::unique_ptr<CloudStorageProvider> provider,
+               std::unique_ptr<CloudLogController> controller);
   static CloudEnvImpl* AsImpl(CloudEnv* env);
   virtual ~CloudEnvImpl();
   Status NewSequentialFile(const std::string& fname,

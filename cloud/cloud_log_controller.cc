@@ -40,13 +40,13 @@ CloudLogController::CloudLogController(const CloudLogControllerOptions& options)
 CloudLogController::~CloudLogController() {}
 
 Status CloudLogController::CreateLogController(
-    const std::string& name, std::shared_ptr<CloudLogController>* result) {
+    const std::string& name, std::unique_ptr<CloudLogController>* result) {
   return CreateLogController(name, CloudLogControllerOptions(), result);
 }
 
 Status CloudLogController::CreateLogController(
     const std::string& name, const CloudLogControllerOptions& options,
-    std::shared_ptr<CloudLogController>* result) {
+    std::unique_ptr<CloudLogController>* result) {
   if (name == kLogKinesis) {
     return CloudLogControllerImpl::CreateKinesisController(options, result);
   } else if (name == kLogKafka) {

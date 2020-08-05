@@ -66,7 +66,7 @@ class CloudTest : public testing::Test {
     EXPECT_OK(CloudEnv::CreateCloudEnv(cname_, base_env_, cloud_env_options_,
                                        &cenv_));
     // delete all pre-existing contents from the bucket
-    Status st = cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+    Status st = cenv_->GetStorageProvider()->EmptyBucket(
         cenv_->GetSrcBucketName(), dbname_);
     ASSERT_TRUE(st.ok() || st.IsNotFound());
     cenv_.reset();
@@ -105,7 +105,7 @@ class CloudTest : public testing::Test {
       Status st = CloudEnv::CreateCloudEnv(cname_, base_env_,
                                            cloud_env_options_, &cenv);
       if (st.ok()) {
-        cenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+        cenv->GetStorageProvider()->EmptyBucket(
             cenv->GetSrcBucketName(), dbname_);
       }
     }
@@ -113,6 +113,25 @@ class CloudTest : public testing::Test {
     CloseDB();
   }
 
+  void CreateCloudEnv(std::unique_ptr<CloudStorageProvider>& provider,
+                      std::unique_ptr<CloudEnv>* cenv) {
+    CreateCloudEnv(std::move(provider), nullptr, cenv);
+  }
+
+  void CreateCloudEnv(std::unique_ptr<CloudStorageProvider> provider,
+                      std::unique_ptr<CloudLogController> controller,
+                      std::unique_ptr<CloudEnv>* cenv) {
+
+    ASSERT_OK(CloudEnv::CreateCloudEnv(cname_, base_env_, cloud_env_options_,
+                                       std::move(provider), std::move(controller), cenv));
+    // To catch any possible file deletion bugs, we set file deletion delay to
+    // smallest possible
+    auto impl = CloudEnvImpl::AsImpl(cenv->get());
+    if (impl != nullptr) {
+      impl->TEST_SetFileDeletionDelay(std::chrono::seconds(0));
+    }
+  }
+  
   void CreateCloudEnv() {
     ASSERT_OK(CloudEnv::CreateCloudEnv(cname_, base_env_, cloud_env_options_,
                                        &cenv_));
@@ -128,7 +147,11 @@ class CloudTest : public testing::Test {
   void OpenDB() {
     // Create new AWS env
     CreateCloudEnv();
-    options_.env = cenv_.get();
+    OpenDB(cenv_);
+  }
+  
+  void OpenDB(std::unique_ptr<CloudEnv>& cenv) {
+    options_.env = cenv.get();
 
     // Sleep for a second because S3 is eventual consistency.
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -252,7 +275,7 @@ class CloudTest : public testing::Test {
     for (std::string path : localFiles) {
       std::string cpath = cenv_->GetSrcObjectPath() + "/" + path;
       ASSERT_OK(
-          cenv_->GetCloudEnvOptions().storage_provider->GetCloudObjectSize(
+                cenv_->GetStorageProvider()->GetCloudObjectSize(
               cenv_->GetSrcBucketName(), cpath, &cloudSize));
 
       // find the size of the file on local storage
@@ -527,9 +550,9 @@ TEST_F(CloudTest, TrueClone) {
     }
   }
 
-  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  cenv_->GetStorageProvider()->EmptyBucket(
       cenv_->GetSrcBucketName(), clone_path1);
-  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  cenv_->GetStorageProvider()->EmptyBucket(
       cenv_->GetSrcBucketName(), clone_path2);
 }
 
@@ -589,23 +612,25 @@ TEST_F(CloudTest, CopyToFromS3) {
   // iter 0 -- not using transfer manager
   // iter 1 -- using transfer manager
   for (int iter = 0; iter < 2; ++iter) {
+    std::unique_ptr<CloudStorageProvider> provider;
     ASSERT_OK(CloudStorageProvider::CreateProvider(CloudStorageProvider::kProviderS3,
-                                                   &cloud_env_options_.storage_provider));
-    auto s3options = cloud_env_options_.storage_provider->GetOptions<S3ProviderOptions>(CloudStorageProvider::kProviderS3);
+                                                   &provider));
+    auto s3options = provider->GetOptions<S3ProviderOptions>(CloudStorageProvider::kProviderS3);
     ASSERT_NE(s3options, nullptr);
     s3options->use_aws_transfer_manager = (iter == 1);
     // Create aws env
     cloud_env_options_.keep_local_sst_files = true;
 
-    CreateCloudEnv();
-    auto impl = CloudEnvImpl::AsImpl(cenv_.get());
+    std::unique_ptr<CloudEnv> cenv;
+    CreateCloudEnv(provider, &cenv);
+    auto impl = CloudEnvImpl::AsImpl(cenv.get());
     impl->TEST_InitEmptyCloudManifest();
     char buffer[1 * 1024 * 1024];
 
     // create a 10 MB file and upload it to cloud
     {
       std::unique_ptr<WritableFile> writer;
-      ASSERT_OK(cenv_->NewWritableFile(fname, &writer, EnvOptions()));
+      ASSERT_OK(cenv->NewWritableFile(fname, &writer, EnvOptions()));
 
       for (int i = 0; i < 10; i++) {
         ASSERT_OK(writer->Append(Slice(buffer, sizeof(buffer))));
@@ -619,7 +644,7 @@ TEST_F(CloudTest, CopyToFromS3) {
     // reopen file for reading. It should be refetched from cloud storage.
     {
       std::unique_ptr<RandomAccessFile> reader;
-      ASSERT_OK(cenv_->NewRandomAccessFile(fname, &reader, EnvOptions()));
+      ASSERT_OK(cenv->NewRandomAccessFile(fname, &reader, EnvOptions()));
 
       uint64_t offset = 0;
       for (int i = 0; i < 10; i++) {
@@ -710,13 +735,12 @@ TEST_F(CloudTest, Savepoint) {
     // source path
     std::string spath = cloud_env->GetSrcObjectPath() + "/" + remapped_fname;
     ASSERT_OK(
-        cloud_env->GetCloudEnvOptions().storage_provider->ExistsCloudObject(
+              cloud_env->GetStorageProvider()->ExistsCloudObject(
             cloud_env->GetSrcBucketName(), spath));
 
     // Verify that the destination path does not have any sst files
     std::string dpath = dest_path + "/" + remapped_fname;
-    ASSERT_TRUE(cloud_env->GetCloudEnvOptions()
-                    .storage_provider
+    ASSERT_TRUE(cloud_env->GetStorageProvider()
                     ->ExistsCloudObject(cloud_env->GetSrcBucketName(), dpath)
                     .IsNotFound());
 
@@ -731,7 +755,7 @@ TEST_F(CloudTest, Savepoint) {
 
     // check that the sst file is copied to dest path
     ASSERT_OK(
-        cloud_env->GetCloudEnvOptions().storage_provider->ExistsCloudObject(
+              cloud_env->GetStorageProvider()->ExistsCloudObject(
             cloud_env->GetSrcBucketName(), dpath));
     ASSERT_OK(cloud_db->Flush(FlushOptions()));
   }
@@ -750,7 +774,7 @@ TEST_F(CloudTest, Savepoint) {
     ASSERT_OK(cloud_db->Get(ReadOptions(), "Hell", &value));
     ASSERT_TRUE(value.compare("Done") == 0);
   }
-  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  cenv_->GetStorageProvider()->EmptyBucket(
       cenv_->GetSrcBucketName(), dest_path);
 }
 
@@ -764,19 +788,21 @@ TEST_F(CloudTest, Encryption) {
     Log(options_.info_log, "Found encryption key id in env variable %s",
         key_id);
   }
+  std::unique_ptr<CloudStorageProvider> provider;
+  
   ASSERT_OK(CloudStorageProvider::CreateProvider(CloudStorageProvider::kProviderS3,
-                                                 provider_options,
-                                                 &cloud_env_options_.storage_provider));
+                                                 provider_options, &provider));
   // Create aws env
-
-  OpenDB();
+  std::unique_ptr<CloudEnv> cenv;
+  CreateCloudEnv(provider, &cenv);
+  OpenDB(cenv);
 
   ASSERT_OK(db_->Put(WriteOptions(), "Hello", "World"));
   // create a file
   ASSERT_OK(db_->Flush(FlushOptions()));
   CloseDB();
 
-  OpenDB();
+  OpenDB(cenv);
   std::string value;
   ASSERT_OK(db_->Get(ReadOptions(), "Hello", &value));
   ASSERT_EQ(value, "World");
@@ -810,15 +836,19 @@ TEST_F(CloudTest, DirectReads) {
 #ifdef USE_KAFKA
 TEST_F(CloudTest, KeepLocalLogKafka) {
   cloud_env_options_.keep_local_log_files = false;
+  std::unique_ptr<CloudLogController> controller;
+  
   ASSERT_OK(CloudLogController::CreateLogController(
-      CloudLogController::kLogKafka, &cloud_env_options_.cloud_log_controller));
+      CloudLogController::kLogKafka, &controller));
   auto kafka_options =
-      cloud_env_options_.cloud_log_controller->GetOptions<KafkaLogOptions>(
+      controller->GetOptions<KafkaLogOptions>(
           CloudLogController::kLogKafka);
   ASSERT_NE(kafka_options, nullptr);
   kafka_options->client_config_params["metadata.broker.list"] =
       "localhost:9092";
-  OpenDB();
+
+  CreateCloudEnv(nullptr, std::move(controller), &cenv_);
+  OpenDB(cenv_);
 
   
   ASSERT_OK(db_->Put(WriteOptions(), "Franz", "Kafka"));
@@ -829,16 +859,26 @@ TEST_F(CloudTest, KeepLocalLogKafka) {
   DestroyDir(dbname_);
   DestroyDir("/tmp/ROCKSET");
 
-  // Create new env.
-  CreateCloudEnv();
-
   // Give env enough time to consume WALs
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
   // Open DB.
   cloud_env_options_.keep_local_log_files = true;
   options_.wal_dir = static_cast<AwsEnv*>(cenv_.get())->GetWALCacheDir();
-  OpenDB();
+
+  
+  ASSERT_OK(CloudLogController::CreateLogController(
+      CloudLogController::kLogKafka, &controller));
+  kafka_options =
+    controller->GetOptions<KafkaLogOptions>(
+          CloudLogController::kLogKafka);
+  ASSERT_NE(kafka_options, nullptr);
+  kafka_options->client_config_params["metadata.broker.list"] =
+      "localhost:9092";
+
+  // Create new env.
+  CreateCloudEnv(nullptr, std::move(controller), &cenv_);
+  OpenDB(cenv_);
 
   // Test read.
   std::string value;
@@ -852,11 +892,13 @@ TEST_F(CloudTest, KeepLocalLogKafka) {
 // TODO(igor): determine why this fails,
 // https://github.com/rockset/rocksdb-cloud/issues/35
 TEST_F(CloudTest, DISABLED_KeepLocalLogKinesis) {
+  std::unique_ptr<CloudLogController> controller;
   cloud_env_options_.keep_local_log_files = false;
   ASSERT_OK(CloudLogController::CreateLogController(
       CloudLogController::kLogKinesis,
-      &cloud_env_options_.cloud_log_controller));
-  OpenDB();
+      &controller));
+  CreateCloudEnv(nullptr, std::move(controller), &cenv_);
+  OpenDB(cenv_);
 
   // Test write.
   ASSERT_OK(db_->Put(WriteOptions(), "Tele", "Kinesis"));
@@ -868,16 +910,20 @@ TEST_F(CloudTest, DISABLED_KeepLocalLogKinesis) {
   DestroyDir(dbname_);
   DestroyDir("/tmp/ROCKSET");
 
+  ASSERT_OK(CloudLogController::CreateLogController(
+      CloudLogController::kLogKinesis,
+      &controller));
+  cloud_env_options_.keep_local_log_files = true;
+  options_.wal_dir = controller->GetCacheDir();
+  
   // Create new env.
-  CreateCloudEnv();
+  CreateCloudEnv(nullptr, std::move(controller), &cenv_);
 
   // Give env enough time to consume WALs
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
   // Open DB.
-  cloud_env_options_.keep_local_log_files = true;
-  options_.wal_dir = static_cast<AwsEnv*>(cenv_.get())->GetWALCacheDir();
-  OpenDB();
+  OpenDB(cenv_);
 
   // Test read.
   std::string value;
@@ -899,7 +945,7 @@ TEST_F(CloudTest, TwoDBsOneBucket) {
   auto firstManifestFile =
       cenv_->GetDestObjectPath() + "/" +
       ((CloudEnvImpl*)cenv_.get())->RemapFilename("MANIFEST-1");
-  EXPECT_OK(cenv_->GetCloudEnvOptions().storage_provider->ExistsCloudObject(
+  EXPECT_OK(cenv_->GetStorageProvider()->ExistsCloudObject(
       cenv_->GetDestBucketName(), firstManifestFile));
   // Create two files
   ASSERT_OK(db_->Put(WriteOptions(), "First", "File"));
@@ -962,8 +1008,7 @@ TEST_F(CloudTest, TwoDBsOneBucket) {
   // so it might not be immediately deleted.
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_TRUE(
-      cenv_->GetCloudEnvOptions()
-          .storage_provider
+     cenv_->GetStorageProvider()
           ->ExistsCloudObject(cenv_->GetDestBucketName(), firstManifestFile)
           .IsNotFound());
   CloseDB();
@@ -1264,7 +1309,7 @@ TEST_F(CloudTest, EphemeralOnCorruptedDB) {
   // Delete MANIFEST file from the storage bucket.
   // This is to simulate the scenario where CLOUDMANIFEST is uploaded, but
   // MANIFEST is not yet uploaded from the durable shard.
-  auto& storage_provider = cenv_->GetCloudEnvOptions().storage_provider;
+  auto storage_provider = cenv_->GetStorageProvider();
   storage_provider->DeleteCloudObject(
       cenv_->GetSrcBucketName(),
       cenv_->GetSrcObjectPath() + "/" + manifest_file_name);
@@ -1431,7 +1476,7 @@ TEST_F(CloudTest, CheckpointToCloud) {
   ASSERT_EQ(value, "d");
   CloseDB();
 
-  cenv_->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  cenv_->GetStorageProvider()->EmptyBucket(
       checkpoint_bucket.GetBucketName(), checkpoint_bucket.GetObjectPath());
 }
 
@@ -1453,14 +1498,14 @@ TEST_F(CloudTest, CopyObjectTest) {
     writableFile->Fsync();
   }
 
-  Status st = cenv_->GetCloudEnvOptions().storage_provider->CopyCloudObject(
+  Status st = cenv_->GetStorageProvider()->CopyCloudObject(
       cenv_->GetSrcBucketName(), cenv_->RemapFilename(fname),
       cenv_->GetSrcBucketName(), dst_fname);
   ASSERT_OK(st);
 
   {
     std::unique_ptr<CloudStorageReadableFile> readableFile;
-    st = cenv_->GetCloudEnvOptions().storage_provider->NewCloudReadableFile(
+    st = cenv_->GetStorageProvider()->NewCloudReadableFile(
         cenv_->GetSrcBucketName(), dst_fname, &readableFile, EnvOptions());
     ASSERT_OK(st);
 
@@ -1544,16 +1589,37 @@ TEST_F(CloudTest, SharedBlockCache) {
   // Cleanup
   clone_db->Close();
   CloseDB();
-  clone_env->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  clone_env->GetStorageProvider()->EmptyBucket(
       cloud_env_options_.src_bucket.GetBucketName(),
       cloud_env_options_.src_bucket.GetObjectPath() + "-clone");
 }
 
 }  //  namespace ROCKSDB_NAMESPACE
 
+#include <stdio.h>
+#include <execinfo.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+void handler(int sig) {
+  void *array[10];
+  size_t size;
+
+  // get void*'s for all entries on the stack
+  size = backtrace(array, 10);
+
+  // print out all the frames to stderr
+  fprintf(stderr, "Error: signal %d:\n", sig);
+  backtrace_symbols_fd(array, (int) size, STDERR_FILENO);
+  exit(1);
+}
+
 // A black-box test for the cloud wrapper around rocksdb
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
+  signal(SIGSEGV, handler);
+  signal(SIGABRT, handler);
   return RUN_ALL_TESTS();
 }
 

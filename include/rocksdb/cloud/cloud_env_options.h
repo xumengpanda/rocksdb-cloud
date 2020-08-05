@@ -23,13 +23,6 @@ struct CloudEnvOptions : public CloudOptions {
   BucketOptions src_bucket;
   BucketOptions dest_bucket;
 
-  // If keep_local_log_files is false, this specifies what service to use
-  // for storage of write-ahead log.
-  std::shared_ptr<CloudLogController> cloud_log_controller;
-
-  // Specifies the class responsible for writing objects to the cloud
-  std::shared_ptr<CloudStorageProvider> storage_provider;
-
   //
   // If true,  then sst files are stored locally and uploaded to the cloud in
   // the background. On restart, all files from the cloud that are not present
@@ -146,9 +139,6 @@ struct CloudEnvOptions : public CloudOptions {
             _constant_sst_file_size_in_sst_file_manager),
         skip_cloud_files_in_getchildren(_skip_cloud_files_in_getchildren) {}
 
-  // print out all options to the log
-  void Dump(Logger* log) const;
-
   // Sets result based on the value of name or alt in the environment
   // Returns true if the name/alt exists in the environment, false otherwise
   static bool GetNameFromEnvironment(const char* name, const char* alt,
@@ -171,10 +161,19 @@ typedef std::map<std::string, std::string> DbidList;
 //
 class CloudEnv : public Env {
  protected:
-  CloudEnvOptions cloud_env_options;
   Env* base_env_;  // The underlying env
+  CloudEnvOptions cloud_env_options;
 
-  CloudEnv(const CloudEnvOptions& options, Env* base);
+  // Specifies the class responsible for writing objects to the cloud
+  std::unique_ptr<CloudStorageProvider> provider_;
+
+  // If keep_local_log_files is false, this specifies what service to use
+  // for storage of write-ahead log.
+  std::unique_ptr<CloudLogController> controller_;
+
+  CloudEnv(Env* base, const CloudEnvOptions& options,
+           std::unique_ptr<CloudStorageProvider> provider = nullptr,
+           std::unique_ptr<CloudLogController>  controller = nullptr);
   virtual const Env* FindInstance(const std::string& name) const;
 
  public:
@@ -186,10 +185,17 @@ class CloudEnv : public Env {
                                const CloudEnvOptions& options,
                                std::unique_ptr<CloudEnv>* result);
   static Status CreateCloudEnv(const std::string& name, Env* base_env,
+                               const CloudEnvOptions& options,
+                               std::unique_ptr<CloudStorageProvider> provider,
+                               std::unique_ptr<CloudLogController> controller,
                                std::unique_ptr<CloudEnv>* result);
   // Returns the underlying env
-  Env* GetBaseEnv() { return base_env_; 
+  Env* GetBaseEnv() {
+    return base_env_; 
   }
+
+  // print out all options to the log
+  void Dump(Logger* log) const;
 
   virtual const char *Name() const;
   
@@ -217,6 +223,13 @@ class CloudEnv : public Env {
   virtual Status DeleteDbid(const std::string& bucket_prefix,
                             const std::string& dbid) = 0;
 
+  virtual CloudStorageProvider* GetStorageProvider() const {
+    return provider_.get();
+  }
+  virtual const CloudLogController* GetLogController() const {
+    return controller_.get();
+  }
+  
   // The SrcBucketName identifies the cloud storage bucket and
   // GetSrcObjectPath specifies the path inside that bucket
   // where data files reside. The specified bucket is used in

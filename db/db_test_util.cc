@@ -129,7 +129,7 @@ DBTestBase::~DBTestBase() {
 
 #ifdef USE_AWS
   auto cenv = dynamic_cast<CloudEnv*>(cloud_env_.get());
-  cenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+  cenv->GetStorageProvider()->EmptyBucket(
       cenv->GetSrcBucketName(), cenv->GetSrcObjectPath());
 #endif
 }
@@ -758,7 +758,7 @@ void DBTestBase::Destroy(const Options& options, bool delete_cf_paths) {
 #ifdef USE_AWS
   if (cloud_env_) {
     auto cenv = static_cast<CloudEnv*>(cloud_env_.get());
-    Status st = cenv->GetCloudEnvOptions().storage_provider->EmptyBucket(
+    Status st = cenv->GetStorageProvider()->EmptyBucket(
         cenv->GetSrcBucketName(), dbname_);
     ASSERT_TRUE(st.ok() || st.IsNotFound());
     for (int r = 0; r < 10; ++r) {

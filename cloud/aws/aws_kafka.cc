@@ -438,7 +438,7 @@ CloudLogWritableFile* KafkaController::CreateWritableFile(
 namespace ROCKSDB_NAMESPACE {
 Status CloudLogControllerImpl::CreateKafkaController(
     const CloudLogControllerOptions& options,
-    std::shared_ptr<CloudLogController>* output) {
+    std::unique_ptr<CloudLogController>* output) {
 #ifndef USE_KAFKA
   (void)options;
   output->reset();

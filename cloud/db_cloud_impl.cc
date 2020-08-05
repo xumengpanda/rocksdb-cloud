@@ -216,7 +216,7 @@ Status DBCloudImpl::Savepoint() {
   std::vector<LiveFileMetaData> live_files;
   GetLiveFilesMetaData(&live_files);
 
-  auto& provider = cenv->GetCloudEnvOptions().storage_provider;
+  auto provider = cenv->GetStorageProvider();
   // If an sst file does not exist in the destination path, then remember it
   std::vector<std::string> to_copy;
   for (auto onefile : live_files) {
@@ -342,7 +342,7 @@ Status DBCloudImpl::DoCheckpointToCloud(
   thread_statuses.resize(thread_count);
 
   auto do_copy = [&](size_t threadId) {
-    auto& provider = cenv->GetCloudEnvOptions().storage_provider;
+    auto provider = cenv->GetStorageProvider();
     while (true) {
       size_t idx = next_file_to_copy.fetch_add(1);
       if (idx >= files_to_copy.size()) {

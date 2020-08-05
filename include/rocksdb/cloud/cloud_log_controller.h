@@ -69,10 +69,10 @@ class CloudLogController {
   virtual ~CloudLogController();
 
   static Status CreateLogController(
-      const std::string& name, std::shared_ptr<CloudLogController>* result);
+      const std::string& name, std::unique_ptr<CloudLogController>* result);
   static Status CreateLogController(
       const std::string& name, const CloudLogControllerOptions& options,
-      std::shared_ptr<CloudLogController>* result);
+      std::unique_ptr<CloudLogController>* result);
 
   // Create a stream to store all log files.
   virtual Status CreateStream(const std::string& topic) = 0;

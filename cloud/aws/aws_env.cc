@@ -180,9 +180,11 @@ Status AwsCloudAccessCredentials::GetCredentialsProvider(
 // The AWS credentials are specified to the constructor via
 // access_key_id and secret_key.
 //
-AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options)
-    : CloudEnvImpl(_cloud_env_options, underlying_env),
-      rng_(time(nullptr)) {
+AwsEnv::AwsEnv(Env* base_env, const CloudEnvOptions& options,
+               std::unique_ptr<CloudStorageProvider> provider,
+               std::unique_ptr<CloudLogController> controller)
+  : CloudEnvImpl(base_env, options, std::move(provider), std::move(controller)),
+    rng_(time(nullptr)) {
   Aws::InitAPI(Aws::SDKOptions());
   if (cloud_env_options.src_bucket.GetRegion().empty() ||
       cloud_env_options.dest_bucket.GetRegion().empty()) {
@@ -198,7 +200,6 @@ AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options)
       cloud_env_options.dest_bucket.SetRegion(region);
     }
   }
-  base_env_ = underlying_env;
 }
 
 void AwsEnv::Shutdown() { Aws::ShutdownAPI(Aws::SDKOptions()); }
@@ -220,7 +221,7 @@ Status AwsEnv::SaveDbid(const std::string& bucket_name, const std::string& dbid,
   std::unordered_map<std::string, std::string> metadata;
   metadata["dirname"] = dirname;
 
-  Status st = cloud_env_options.storage_provider->PutCloudObjectMetadata(
+  Status st = provider_->PutCloudObjectMetadata(
       bucket_name, dbidkey, metadata);
 
   if (!st.ok()) {
@@ -247,8 +248,7 @@ Status AwsEnv::GetPathForDbid(const std::string& bucket,
       "[s3] Bucket %s GetPathForDbid dbid %s", bucket.c_str(), dbid.c_str());
 
   CloudObjectInformation info;
-  Status st = cloud_env_options.storage_provider->GetCloudObjectMetadata(
-      bucket, dbidkey, &info);
+  Status st = provider_->GetCloudObjectMetadata(bucket, dbidkey, &info);
   if (!st.ok()) {
     if (st.IsNotFound()) {
       Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
@@ -281,7 +281,7 @@ Status AwsEnv::GetPathForDbid(const std::string& bucket,
 Status AwsEnv::GetDbidList(const std::string& bucket, DbidList* dblist) {
   // fetch the list all all dbids
   std::vector<std::string> dbid_list;
-  Status st = cloud_env_options.storage_provider->ListCloudObjects(
+  Status st = provider_->ListCloudObjects(
       bucket, dbid_registry_, &dbid_list);
   if (!st.ok()) {
     Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
@@ -311,8 +311,7 @@ Status AwsEnv::GetDbidList(const std::string& bucket, DbidList* dblist) {
 Status AwsEnv::DeleteDbid(const std::string& bucket, const std::string& dbid) {
   // fetch the list all all dbids
   std::string dbidkey = dbid_registry_ + dbid;
-  Status st =
-      cloud_env_options.storage_provider->DeleteCloudObject(bucket, dbidkey);
+  Status st = provider_->DeleteCloudObject(bucket, dbidkey);
   Log(InfoLogLevel::DEBUG_LEVEL, GetInfoLogger(),
       "[aws] %s DeleteDbid DeleteDbid(%s) %s", bucket.c_str(), dbid.c_str(),
       st.ToString().c_str());
@@ -329,7 +328,10 @@ Status AwsEnv::LockFile(const std::string& /*fname*/, FileLock** lock) {
 Status AwsEnv::UnlockFile(FileLock* /*lock*/) { return Status::OK(); }
 
 // The factory method for creating an S3 Env
-Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
+Status AwsEnv::NewAwsEnv(Env* base_env, 
+                         const CloudEnvOptions& cloud_options,
+                         std::unique_ptr<CloudStorageProvider> provider,
+                         std::unique_ptr<CloudLogController> controller,
                          std::unique_ptr<CloudEnv>* cenv) {
   // If underlying env is not defined, then use PosixEnv
   if (!base_env) {
@@ -339,9 +341,9 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
   // comes into play.
   CloudEnvOptions options = cloud_options;  // Make a copy
   Status status = Status::OK();
-  if (!options.storage_provider) {
+  if (!provider) {
     status = CloudStorageProvider::CreateProvider(
-        CloudStorageProvider::kProviderS3, &options.storage_provider);
+        CloudStorageProvider::kProviderS3, &provider);
   }
   if (!status.ok()) {
     Log(InfoLogLevel::ERROR_LEVEL, options.info_log,
@@ -349,12 +351,12 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
         status.ToString().c_str());
     return status;
   }
-  cenv->reset(new AwsEnv(base_env, options));
+  cenv->reset(new AwsEnv(base_env, options, std::move(provider), std::move(controller)));
   return status;
 }
 
 std::string AwsEnv::GetWALCacheDir() {
-  return cloud_env_options.cloud_log_controller->GetCacheDir();
+  return controller_->GetCacheDir();
 }
 
 #endif  // USE_AWS

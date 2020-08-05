@@ -101,7 +101,7 @@ class CloudStorageWritableFileImpl : public CloudStorageWritableFile {
 class CloudStorageProviderImpl : public CloudStorageProvider {
  public:
   static Status CreateS3Provider(const CloudStorageProviderOptions& options,
-                                 std::shared_ptr<CloudStorageProvider>* result);
+                                 std::unique_ptr<CloudStorageProvider>* result);
 
   static CloudStorageProviderImpl* AsImpl(CloudStorageProvider* provider);
   CloudStorageProviderImpl(const CloudStorageProviderOptions& options);

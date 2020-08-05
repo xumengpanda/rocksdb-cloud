@@ -133,7 +133,7 @@ Status CloudEnvImpl::FindObsoleteFiles(const std::string& bucket_name_prefix,
     std::string mpath = iter->second;
 
     std::vector<std::string> objects;
-    st = cloud_env_options.storage_provider->ListCloudObjects(
+    st = provider_->ListCloudObjects(
         bucket_name_prefix, mpath, &objects);
     if (!st.ok()) {
       Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
@@ -171,8 +171,7 @@ Status CloudEnvImpl::FindObsoleteDbid(
     for (auto iter = dbid_list.begin(); iter != dbid_list.end(); ++iter) {
       std::unique_ptr<SequentialFile> result;
       std::string path = CloudManifestFile(iter->second);
-      st = GetCloudEnvOptions().storage_provider->ExistsCloudObject(
-          GetDestBucketName(), path);
+      st = provider_->ExistsCloudObject(GetDestBucketName(), path);
       // this dbid can be cleaned up
       if (st.IsNotFound()) {
         to_delete_list->push_back(iter->first);
@@ -204,8 +203,7 @@ Status CloudEnvImpl::extractParents(const std::string& bucket_name_prefix,
     // download IDENTITY
     std::string cloudfile = iter->second + "/IDENTITY";
     std::string localfile = scratch + "/.rockset_IDENTITY." + random;
-    st = GetCloudEnvOptions().storage_provider->GetCloudObject(
-        bucket_name_prefix, cloudfile, localfile);
+    st = provider_->GetCloudObject(bucket_name_prefix, cloudfile, localfile);
     if (!st.ok() && !st.IsNotFound()) {
       Log(InfoLogLevel::ERROR_LEVEL, GetInfoLogger(),
           "[pg] Unable to download IDENTITY file from "

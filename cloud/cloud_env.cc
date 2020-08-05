@@ -104,12 +104,17 @@ void BucketOptions::TEST_Initialize(const std::string& bucket,
 const std::string CloudEnv::kAwsCloudName = "aws";
 const std::string CloudEnv::kEnvCloudName = "cloud";
 
-CloudEnv::CloudEnv(const CloudEnvOptions& options, Env* base)
-    : cloud_env_options(options), base_env_(base) {}
+CloudEnv::CloudEnv(Env* base, const CloudEnvOptions& options,
+                   std::unique_ptr<CloudStorageProvider> provider,
+                   std::unique_ptr<CloudLogController> controller)
+  : base_env_(base), cloud_env_options(options),
+    provider_(std::move(provider)),
+    controller_(std::move(controller)) {
+}
 
 CloudEnv::~CloudEnv() {
-  cloud_env_options.cloud_log_controller.reset();
-  cloud_env_options.storage_provider.reset();
+  controller_.reset();
+  provider_.reset();
 }
 
 const char* CloudEnv::Name() const {
@@ -126,16 +131,46 @@ const Env* CloudEnv::FindInstance(const std::string& name) const {
   }
 }
 
+void CloudEnv::Dump(Logger* log) const {
+  if (provider_) {
+    provider_->Dump(log);
+  }
+  if (controller_) {
+    controller_->Dump(log);
+  }
+  Header(log, "               COptions.keep_local_sst_files: %d",
+         cloud_env_options.keep_local_sst_files);
+  Header(log, "               COptions.keep_local_log_files: %d",
+         cloud_env_options.keep_local_log_files);
+  Header(log, "           COptions.create_bucket_if_missing: %s",
+         cloud_env_options.create_bucket_if_missing ? "true" : "false");
+  Header(log, "                         COptions.run_purger: %s",
+         cloud_env_options.run_purger ? "true" : "false");
+  Header(log, "           COptions.ephemeral_resync_on_open: %s",
+         cloud_env_options.ephemeral_resync_on_open ? "true" : "false");
+  Header(log, "             COptions.skip_dbid_verification: %s",
+         cloud_env_options.skip_dbid_verification ? "true" : "false");
+  Header(log, "           COptions.number_objects_listed_in_one_iteration: %d",
+         cloud_env_options.number_objects_listed_in_one_iteration);
+}
+
 Status CloudEnv::CreateCloudEnv(const std::string& name, Env* base_env,
                                 const CloudEnvOptions& options,
                                 std::unique_ptr<CloudEnv>* result) {
+  return CreateCloudEnv(name, base_env, options, nullptr, nullptr, result);
+}
+
+Status CloudEnv::CreateCloudEnv(const std::string& name, Env* base_env,
+                                const CloudEnvOptions& options,
+                                std::unique_ptr<CloudStorageProvider> provider,
+                                std::unique_ptr<CloudLogController> controller,
+                                std::unique_ptr<CloudEnv>* result) {
   Status st = Status::OK();
   // Dump out cloud env options
-  options.Dump(options.info_log.get());
   std::string id;
   bool is_test = CloudImplConstants::IsTestId(name, &id);
   if (id == kAwsCloudName) {
-    st = AwsEnv::NewAwsEnv(base_env, options, result);
+    st = AwsEnv::NewAwsEnv(base_env, options, std::move(provider), std::move(controller), result);
   } else {
     return Status::NotSupported("Unknown Cloud Environment: ", name);
   }
@@ -148,6 +183,9 @@ Status CloudEnv::CreateCloudEnv(const std::string& name, Env* base_env,
       st = impl->Prepare();
     }
   }
+  if (st.ok()) {
+    result->get()->Dump(options.info_log.get());
+  }    
   return st;
 }
 }  // namespace ROCKSDB_NAMESPACE

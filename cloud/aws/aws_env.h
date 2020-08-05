@@ -49,7 +49,10 @@ class S3ReadableFile;
 class AwsEnv : public CloudEnvImpl {
  public:
   // A factory method for creating S3 envs
-  static Status NewAwsEnv(Env* env, const CloudEnvOptions& env_options,
+  static Status NewAwsEnv(Env* env, 
+                          const CloudEnvOptions& env_options,
+                          std::unique_ptr<CloudStorageProvider> provider,
+                          std::unique_ptr<CloudLogController> controller,
                           std::unique_ptr<CloudEnv>* cenv);
 
   virtual ~AwsEnv() {}
@@ -87,7 +90,10 @@ class AwsEnv : public CloudEnvImpl {
   // The AWS credentials are specified to the constructor via
   // access_key_id and secret_key.
   //
-  explicit AwsEnv(Env* underlying_env, const CloudEnvOptions& cloud_options);
+  explicit AwsEnv(Env* underlying_env,
+                  const CloudEnvOptions& cloud_options,
+                  std::unique_ptr<CloudStorageProvider> provider,
+                  std::unique_ptr<CloudLogController> controller);
 
   // The pathname that contains a list of all db's inside a bucket.
   static constexpr const char* dbid_registry_ = "/.rockset/dbid/";
