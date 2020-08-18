@@ -2,6 +2,7 @@
 //
 //
 
+#include <aws/core/http/Scheme.h>
 #include <cinttypes>
 
 #include "cloud/aws/aws_file.h"
@@ -120,6 +121,8 @@ Status AwsCloudOptions::GetClientConfiguration(
   }
 
   config->region = ToAwsString(region);
+  config->verifySSL = false;
+  config->maxConnections = 100;
   return Status::OK();
 }
 #else
