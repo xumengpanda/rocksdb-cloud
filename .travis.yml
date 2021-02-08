@@ -30,7 +30,7 @@ services:
 jobs:
   include:
     - stage: Test
-      script: pwd && echo $TRAVIS_BUILD_DIR && docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src --name test1 -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test ./cloud_manifest_test
+      script: pwd && echo $TRAVIS_BUILD_DIR && docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src --name test1 -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test make -j4 cloud_manifest_test && ./cloud_manifest_test
     #   script: OPT=-DTRAVIS V=1 USE_AWS=1 USE_KAFKA=1 make -j4 db_test && LD_LIBRARY_PATH=/usr/local/lib ./db_test --gtest_filter=-DBTest.MergeTestTime:DBTest.UnsupportedManualSync:DBTest.ApproximateSizes*:DBTest.HiddenValuesAreRemoved:DBTest.UnremovableSingleDelete:DBTest.OverlapInLevel0:MultiThreaded/MultiThreadedDBTest*:DBTest.SingleDeleteFlush:DBTest.GetLevel0Ordering:DBTest.GetPicksCorrectFile
     # - script: OPT=-DTRAVIS V=1 USE_AWS=1 USE_KAFKA=1 make -j4 db_test && LD_LIBRARY_PATH=/usr/local/lib ./db_test --gtest_filter=DBTest.SingleDeleteFlush:DBTest.GetLevel0Ordering:DBTest.GetPicksCorrectFile
     # - script: OPT=-DTRAVIS V=1 USE_AWS=1 USE_KAFKA=1 make -j4 db_test && LD_LIBRARY_PATH=/usr/local/lib ./db_test --gtest_filter=DBTest.HiddenValuesAreRemoved
