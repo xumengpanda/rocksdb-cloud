@@ -9,7 +9,7 @@ compiler:
   - gcc
 cache:
   directories:
-  - "$TRAVIS_BUILD_DIR/.cache"
+  - .cache
 addons:
    apt:
       packages:
