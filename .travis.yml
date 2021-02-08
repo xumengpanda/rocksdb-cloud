@@ -8,28 +8,22 @@ arch:
 compiler:
   - gcc
 addons:
-   apt:
-      packages:
-      - zlib1g-dev
-      - libbz2-dev
-      - libsnappy-dev
-      - curl
-      - libgflags-dev
-      - mingw-w64
-      - libcurl4-openssl-dev
-      - libssl-dev
-      - uuid-dev
-      - libpulse-dev
-
-env:
-  global:
-    # include $HOME/.local/bin for `aws`
-    - PATH=$HOME/.local/bin:$PATH
-
-before_install:
-  - pyenv global 3.7.1
-  - pip install -U pip
-  - pip install awscli
+  apt:
+    packages:
+    - zlib1g-dev
+    - libbz2-dev
+    - libsnappy-dev
+    - curl
+    - libgflags-dev
+    - mingw-w64
+    - libcurl4-openssl-dev
+    - libssl-dev
+    - uuid-dev
+    - libpulse-dev
+  snaps:
+    - name: aws-cli
+      confinement: classic # or devmode
+      channel: latest/edge # will be passed to --channel flag
 
 services:
   - docker
