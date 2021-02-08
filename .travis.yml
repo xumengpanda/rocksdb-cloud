@@ -7,9 +7,6 @@ arch:
   - amd64
 compiler:
   - gcc
-cache:
-  directories:
-  - .cache
 addons:
    apt:
       packages:
@@ -30,10 +27,10 @@ services:
 jobs:
   include:
     - stage: Build
-      script: docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test /bin/bash -c "make -j4 cloud_manifest_test db_cloud_test"
+      script: docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test /bin/bash -c "make -j4 cloud_manifest_test db_cloud_test && aws --recursive s3 cp $TRAVIS_BUILD_DIR/.cache s3://rockset.dbcloudtest.1000/$TRAVIS_BUILD_ID/.cache"
     - stage: Test
-      script: docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test /bin/bash -c "make -j4 cloud_manifest_test && ./cloud_manifest_test"
-    - script: docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test /bin/bash -c "make -j4 db_cloud_test && ./db_cloud_test --gtest_filter=-CloudTest.KeepLocalLogKafka"
+      script: docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test /bin/bash -c "aws --recursive s3 cp s3://rockset.dbcloudtest.1000/$TRAVIS_BUILD_ID/.cache $TRAVIS_BUILD_DIR/.cache && make -j4 cloud_manifest_test && ./cloud_manifest_test"
+    - script: docker run -v $TRAVIS_BUILD_DIR:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY --rm rockset/rocksdb_cloud_runtime:test /bin/bash -c "aws --recursive s3 cp s3://rockset.dbcloudtest.1000/$TRAVIS_BUILD_ID/.cache $TRAVIS_BUILD_DIR/.cache && make -j4 db_cloud_test && ./db_cloud_test --gtest_filter=-CloudTest.KeepLocalLogKafka"
     #   script: OPT=-DTRAVIS V=1 USE_AWS=1 USE_KAFKA=1 make -j4 db_test && LD_LIBRARY_PATH=/usr/local/lib ./db_test --gtest_filter=-DBTest.MergeTestTime:DBTest.UnsupportedManualSync:DBTest.ApproximateSizes*:DBTest.HiddenValuesAreRemoved:DBTest.UnremovableSingleDelete:DBTest.OverlapInLevel0:MultiThreaded/MultiThreadedDBTest*:DBTest.SingleDeleteFlush:DBTest.GetLevel0Ordering:DBTest.GetPicksCorrectFile
     # - script: OPT=-DTRAVIS V=1 USE_AWS=1 USE_KAFKA=1 make -j4 db_test && LD_LIBRARY_PATH=/usr/local/lib ./db_test --gtest_filter=DBTest.SingleDeleteFlush:DBTest.GetLevel0Ordering:DBTest.GetPicksCorrectFile
     # - script: OPT=-DTRAVIS V=1 USE_AWS=1 USE_KAFKA=1 make -j4 db_test && LD_LIBRARY_PATH=/usr/local/lib ./db_test --gtest_filter=DBTest.HiddenValuesAreRemoved
