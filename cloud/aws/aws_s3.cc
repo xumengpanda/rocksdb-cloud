@@ -311,6 +311,8 @@ class AwsS3ClientWrapperImpl : public AwsS3ClientWrapper {
 
 namespace test {
 // An wrapper that mimicks S3 operations in local storage. Used for test.
+// There are a lot of string copies between std::string and Aws::String
+// unfortunately. However, since it's used for tests only, it's probably fine.
 class TestS3ClientWrapper : public AwsS3ClientWrapper {
  public:
   TestS3ClientWrapper(Env* base_env) : base_env_(base_env) {
@@ -326,6 +328,8 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     auto bucket = ToStdString(request.GetBucket());
     auto prefix = ToStdString(request.GetPrefix());
     auto dir = getLocalPath(request.GetBucket(), request.GetPrefix());
+
+    // If this directory is not found, just ignore and return nothing.
     bool is_dir{false};
     {
       Status st = base_env_->IsDirectory(dir, &is_dir);
@@ -333,21 +337,23 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
         return ListObjectsOutcome(ListObjectsResult());
       }
     }
+
     std::vector<std::string> children;
     base_env_->GetChildren(dir, &children);
 
     ListObjectsResult res;
     Aws::Vector<Object> contents;
     for (const auto& c : children) {
+      // Ignore these 2 special directories.
       if (c == "." || c == "..") {
         continue;
       }
-      Object o;
       std::string x = prefix + c;
+      Object o;
       o.SetKey(ToAwsString(x));
       contents.emplace_back(std::move(o));
     }
-    res.SetContents(contents);
+    res.SetContents(std::move(contents));
 
     ListObjectsOutcome outcome(res);
     return outcome;
@@ -407,7 +413,7 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     std::vector<char> scratch;
     scratch.reserve(file_size);
     Slice buffer;
-    fromFile->Read(5000, &buffer, scratch.data());
+    fromFile->Read(file_size, &buffer, scratch.data());
     toFile->Append(buffer);
 
     CopyObjectResult res;
@@ -441,6 +447,8 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     fromFile->Read(file_size, &buffer, scratch.data());
 
     if (request.RangeHasBeenSet()) {
+      // Range is a string in this format: "bytes=start-end".
+      // start and end are inclusive.
       auto range = request.GetRange();
       int start = 0;
       int end = 0;
@@ -467,6 +475,7 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
 
   virtual std::shared_ptr<Aws::Transfer::TransferHandle> DownloadFile(
       const Aws::String&, const Aws::String&, const Aws::String&) override {
+    // Don't support AWS Transfer Manager for now.
     return nullptr;
   }
 
@@ -479,10 +488,11 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     if (stream) {
       ss << stream->rdbuf();
     }
-    std::string buffer = ToStdString(ss.str());
-    {
-      auto to = getLocalPath(request.GetBucket(), request.GetKey());
 
+    // First, create the actual file.
+    {
+      std::string buffer = ToStdString(ss.str());
+      auto to = getLocalPath(request.GetBucket(), request.GetKey());
       auto parent_path = getParentPath(to);
       createDirRecursively(parent_path);
 
@@ -493,9 +503,12 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
         f->Append(buffer);
       }
 
+      // Even if this is an empty file, we still want to create it.
       f->Sync();
     }
 
+    // If metadata is set on this file, create the metadata file.
+    // The metadata is stored in a separate directory.
     if (request.MetadataHasBeenSet()) {
       auto to = getMetadataLocalPath(request.GetBucket(), request.GetKey());
       auto parent_path = getParentPath(to);
@@ -504,7 +517,7 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
       std::unique_ptr<WritableFile> f;
       base_env_->NewWritableFile(to, &f, EnvOptions());
 
-      std::string metadata = buildMetadata(request.GetMetadata());
+      std::string metadata = serializeMetadata(request.GetMetadata());
       f->Append(metadata);
     }
 
@@ -515,6 +528,7 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
   virtual std::shared_ptr<Aws::Transfer::TransferHandle> UploadFile(
       const Aws::String&, const Aws::String&, const Aws::String&,
       uint64_t) override {
+    // Don't support AWS Transfer Manager for now.
     return nullptr;
   }
 
@@ -544,6 +558,13 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     auto metadataPath =
         getMetadataLocalPath(request.GetBucket(), request.GetKey());
     if (base_env_->FileExists(metadataPath).ok()) {
+      // Metadata is stored in the following format
+      // ```
+      // key1
+      // value1
+      // key2
+      // value2
+      // ```
       std::ifstream metadataFile(metadataPath);
       std::string line;
       Aws::String key;
@@ -587,17 +608,20 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     return root_dir_ + "/.metadata/" + bucket + "/" + prefix;
   }
 
+  // Given an S3 location, return actual directory on local disk.
   std::string getLocalPath(const Aws::String& bucket,
                            const Aws::String& prefix) {
     return getLocalPathStr(ToStdString(bucket), ToStdString(prefix));
   }
 
+  // Given an S3 location, return the metadata directory on local disk.
   std::string getMetadataLocalPath(const Aws::String& bucket,
                                    const Aws::String& prefix) {
     return getMetadataLocalPathStr(ToStdString(bucket), ToStdString(prefix));
   }
 
-  std::string buildMetadata(
+  // Serialize metadata information in order to store on disk.
+  std::string serializeMetadata(
       const Aws::Map<Aws::String, Aws::String>& metadata) {
     Aws::StringStream ss;
     for (const auto& kv : metadata) {
@@ -606,18 +630,21 @@ class TestS3ClientWrapper : public AwsS3ClientWrapper {
     return ToStdString(ss.str());
   }
 
+  // Recurisvely delete the directory.
   void destroyDir(const std::string& dir) {
     std::string cmd = "rm -rf " + dir;
     int rc = system(cmd.c_str());
     (void)rc;
   }
 
+  // Recursively create the directory and any missing component in the path.
   void createDirRecursively(const std::string& dir) {
     std::string cmd = "mkdir -p " + dir;
     int rc = system(cmd.c_str());
     (void)rc;
   }
 
+  // Given /a/b/c, return /a/b/
   std::string getParentPath(const std::string& path) {
     auto parts = StringSplit(path, '/');
     if (parts.empty()) {
