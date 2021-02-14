@@ -70,7 +70,7 @@ docker run -v $SRC_ROOT:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src \
     -u $UID -e V=1 -e USE_AWS=1 -e USE_KAFKA=1 \
     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     --rm rockset/rocksdb_cloud_runtime:test \
-    /bin/bash -c "make -j4 db_test db_test2 db_basic_test env_basic_test db_cloud_test cloud_manifest_test"
+    /bin/bash -c "make -j $PARALLEL_JOBS db_test db_test2 db_basic_test env_basic_test db_cloud_test cloud_manifest_test"
 
 echo "Running db_test. This test might take a while. Get some coffee :)"
 docker run -v $SRC_ROOT:/opt/rocksdb-cloud/src -w /opt/rocksdb-cloud/src \

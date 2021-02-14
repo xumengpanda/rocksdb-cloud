@@ -134,7 +134,6 @@ DBTestBase::~DBTestBase() {
   } else {
     EXPECT_OK(DestroyDB(dbname_, options));
   }
-  delete env_;
 
 #ifdef USE_AWS
   auto aenv = dynamic_cast<CloudEnv*>(s3_env_);
@@ -142,6 +141,7 @@ DBTestBase::~DBTestBase() {
       aenv->GetSrcBucketName(), aenv->GetSrcObjectPath());
 #endif
   delete s3_env_;
+  delete env_;
 }
 
 bool DBTestBase::ShouldSkipOptions(int option_config, int skip_mask) {

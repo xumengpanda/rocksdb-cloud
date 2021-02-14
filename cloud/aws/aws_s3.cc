@@ -4,6 +4,21 @@
 // A directory maps to an an zero-size object in an S3 bucket
 // A sst file maps to an object in that S3 bucket.
 //
+#include <aws/core/utils/DateTime.h>
+#include <aws/core/utils/memory/stl/AWSString.h>
+#include <aws/core/utils/memory/stl/AWSStringStream.h>
+#include <aws/core/utils/memory/stl/AWSVector.h>
+#include <aws/core/utils/stream/ResponseStream.h>
+
+#include <cstdio>
+#include <functional>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <string>
+
+#include "env/io_posix.h"
+#include "test_util/testharness.h"
 #ifdef USE_AWS
 #include <aws/core/Aws.h>
 #include <aws/core/utils/Outcome.h>
@@ -105,7 +120,47 @@ void SetEncryptionParameters(const CloudEnvOptions& cloud_env_options,
 
 class AwsS3ClientWrapper {
  public:
-  AwsS3ClientWrapper(
+  virtual ~AwsS3ClientWrapper() = default;
+
+  virtual Aws::S3::Model::ListObjectsOutcome ListCloudObjects(
+      const Aws::S3::Model::ListObjectsRequest& request) = 0;
+
+  virtual Aws::S3::Model::CreateBucketOutcome CreateBucket(
+      const Aws::S3::Model::CreateBucketRequest& request) = 0;
+
+  virtual Aws::S3::Model::HeadBucketOutcome HeadBucket(
+      const Aws::S3::Model::HeadBucketRequest& request) = 0;
+
+  virtual Aws::S3::Model::DeleteObjectOutcome DeleteCloudObject(
+      const Aws::S3::Model::DeleteObjectRequest& request) = 0;
+
+  virtual Aws::S3::Model::CopyObjectOutcome CopyCloudObject(
+      const Aws::S3::Model::CopyObjectRequest& request) = 0;
+
+  virtual Aws::S3::Model::GetObjectOutcome GetCloudObject(
+      const Aws::S3::Model::GetObjectRequest& request) = 0;
+
+  virtual std::shared_ptr<Aws::Transfer::TransferHandle> DownloadFile(
+      const Aws::String& bucket_name, const Aws::String& object_path,
+      const Aws::String& destination) = 0;
+
+  virtual Aws::S3::Model::PutObjectOutcome PutCloudObject(
+      const Aws::S3::Model::PutObjectRequest& request,
+      uint64_t size_hint = 0) = 0;
+
+  virtual std::shared_ptr<Aws::Transfer::TransferHandle> UploadFile(
+      const Aws::String& bucket_name, const Aws::String& object_path,
+      const Aws::String& destination, uint64_t file_size) = 0;
+
+  virtual Aws::S3::Model::HeadObjectOutcome HeadObject(
+      const Aws::S3::Model::HeadObjectRequest& request) = 0;
+
+  virtual bool HasTransferManager() const { return false; }
+};
+
+class AwsS3ClientWrapperImpl : public AwsS3ClientWrapper {
+ public:
+  AwsS3ClientWrapperImpl(
       const std::shared_ptr<Aws::Auth::AWSCredentialsProvider>& creds,
       const Aws::Client::ClientConfiguration& config,
       const CloudEnvOptions& cloud_options)
@@ -129,7 +184,7 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::ListObjectsOutcome ListCloudObjects(
-      const Aws::S3::Model::ListObjectsRequest& request) {
+      const Aws::S3::Model::ListObjectsRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kListOp);
     auto outcome = client_->ListObjects(request);
@@ -138,7 +193,7 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::CreateBucketOutcome CreateBucket(
-      const Aws::S3::Model::CreateBucketRequest& request) {
+      const Aws::S3::Model::CreateBucketRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kCreateOp);
     auto outcome = client_->CreateBucket(request);
@@ -147,15 +202,16 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::HeadBucketOutcome HeadBucket(
-      const Aws::S3::Model::HeadBucketRequest& request) {
+      const Aws::S3::Model::HeadBucketRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kInfoOp);
     auto outcome = client_->HeadBucket(request);
     t.SetSuccess(outcome.IsSuccess());
     return outcome;
   }
+
   Aws::S3::Model::DeleteObjectOutcome DeleteCloudObject(
-      const Aws::S3::Model::DeleteObjectRequest& request) {
+      const Aws::S3::Model::DeleteObjectRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kDeleteOp);
     auto outcome = client_->DeleteObject(request);
@@ -164,7 +220,7 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::CopyObjectOutcome CopyCloudObject(
-      const Aws::S3::Model::CopyObjectRequest& request) {
+      const Aws::S3::Model::CopyObjectRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kCopyOp);
     auto outcome = client_->CopyObject(request);
@@ -173,7 +229,7 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::GetObjectOutcome GetCloudObject(
-      const Aws::S3::Model::GetObjectRequest& request) {
+      const Aws::S3::Model::GetObjectRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kReadOp);
     auto outcome = client_->GetObject(request);
@@ -183,9 +239,10 @@ class AwsS3ClientWrapper {
     }
     return outcome;
   }
+
   std::shared_ptr<Aws::Transfer::TransferHandle> DownloadFile(
       const Aws::String& bucket_name, const Aws::String& object_path,
-      const Aws::String& destination) {
+      const Aws::String& destination) override {
     CloudRequestCallbackGuard guard(cloud_request_callback_.get(),
                                     CloudRequestOpType::kReadOp);
     auto handle =
@@ -202,7 +259,8 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::PutObjectOutcome PutCloudObject(
-      const Aws::S3::Model::PutObjectRequest& request, uint64_t size_hint = 0) {
+      const Aws::S3::Model::PutObjectRequest& request,
+      uint64_t size_hint = 0) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kWriteOp, size_hint);
     auto outcome = client_->PutObject(request);
@@ -212,7 +270,7 @@ class AwsS3ClientWrapper {
 
   std::shared_ptr<Aws::Transfer::TransferHandle> UploadFile(
       const Aws::String& bucket_name, const Aws::String& object_path,
-      const Aws::String& destination, uint64_t file_size) {
+      const Aws::String& destination, uint64_t file_size) override {
     CloudRequestCallbackGuard guard(cloud_request_callback_.get(),
                                     CloudRequestOpType::kWriteOp, file_size);
 
@@ -227,7 +285,7 @@ class AwsS3ClientWrapper {
   }
 
   Aws::S3::Model::HeadObjectOutcome HeadObject(
-      const Aws::S3::Model::HeadObjectRequest& request) {
+      const Aws::S3::Model::HeadObjectRequest& request) override {
     CloudRequestCallbackGuard t(cloud_request_callback_.get(),
                                 CloudRequestOpType::kInfoOp);
     auto outcome = client_->HeadObject(request);
@@ -237,7 +295,10 @@ class AwsS3ClientWrapper {
   CloudRequestCallback* GetRequestCallback() {
     return cloud_request_callback_.get();
   }
-  bool HasTransferManager() const { return transfer_manager_.get() != nullptr; }
+
+  bool HasTransferManager() const override {
+    return transfer_manager_.get() != nullptr;
+  }
 
  private:
   static Aws::Utils::Threading::Executor* GetAwsTransferManagerExecutor() {
@@ -249,6 +310,339 @@ class AwsS3ClientWrapper {
   std::shared_ptr<Aws::Transfer::TransferManager> transfer_manager_;
   std::shared_ptr<CloudRequestCallback> cloud_request_callback_;
 };
+
+namespace test {
+// An wrapper that mimicks S3 operations in local storage. Used for test.
+class TestS3ClientWrapper : public AwsS3ClientWrapper {
+ public:
+  TestS3ClientWrapper(Env* base_env) : base_env_(base_env) {
+    root_dir_ = test::TmpDir(base_env_);
+    base_env_->CreateDirIfMissing(root_dir_);
+  }
+
+  ~TestS3ClientWrapper() { base_env_->DeleteDir(root_dir_); }
+
+  Aws::S3::Model::ListObjectsOutcome ListCloudObjects(
+      const Aws::S3::Model::ListObjectsRequest& request) override {
+    using namespace Aws::S3::Model;
+    auto bucket = ToStdString(request.GetBucket());
+    auto prefix = ToStdString(request.GetPrefix());
+    auto dir = getLocalPath(request.GetBucket(), request.GetPrefix());
+    bool is_dir{false};
+    {
+      Status st = base_env_->IsDirectory(dir, &is_dir);
+      if (!st.ok() || !is_dir) {
+        return ListObjectsOutcome(ListObjectsResult());
+      }
+    }
+    std::vector<std::string> children;
+    base_env_->GetChildren(dir, &children);
+
+    ListObjectsResult res;
+    Aws::Vector<Object> contents;
+    for (const auto& c : children) {
+      if (c == "." || c == "..") {
+        continue;
+      }
+      Object o;
+      std::string x = prefix + c;
+      o.SetKey(ToAwsString(x));
+      contents.emplace_back(std::move(o));
+    }
+    res.SetContents(contents);
+
+    ListObjectsOutcome outcome(res);
+    return outcome;
+  }
+
+  virtual Aws::S3::Model::CreateBucketOutcome CreateBucket(
+      const Aws::S3::Model::CreateBucketRequest& request) override {
+    using namespace Aws::S3::Model;
+    auto bucket = ToStdString(request.GetBucket());
+    base_env_->CreateDirIfMissing(root_dir_ + "/" + bucket);
+    CreateBucketResult res;
+    CreateBucketOutcome outcome(res);
+    return outcome;
+  }
+
+  virtual Aws::S3::Model::HeadBucketOutcome HeadBucket(
+      const Aws::S3::Model::HeadBucketRequest& /* request */) override {
+    using namespace Aws::S3::Model;
+    HeadBucketOutcome outcome;
+    return outcome;
+  }
+
+  virtual Aws::S3::Model::DeleteObjectOutcome DeleteCloudObject(
+      const Aws::S3::Model::DeleteObjectRequest& request) override {
+    using namespace Aws::S3::Model;
+    auto path = getLocalPath(request.GetBucket(), request.GetKey());
+    auto status = base_env_->DeleteFile(path);
+    DeleteObjectResult res;
+    DeleteObjectOutcome outcome;
+    if (status.IsNotFound()) {
+      Aws::Client::AWSError<Aws::S3::S3Errors> error(
+          Aws::S3::S3Errors::RESOURCE_NOT_FOUND, false);
+      outcome = DeleteObjectOutcome(error);
+    }
+
+    return outcome;
+  }
+
+  virtual Aws::S3::Model::CopyObjectOutcome CopyCloudObject(
+      const Aws::S3::Model::CopyObjectRequest& request) override {
+    using namespace Aws::S3::Model;
+    auto from = getLocalPath(request.GetCopySource(), "");
+    auto to = getLocalPath(request.GetBucket(), request.GetKey());
+
+    auto parent_path = getParentPath(to);
+    createDirRecursively(parent_path);
+
+    std::unique_ptr<WritableFile> toFile;
+    base_env_->NewWritableFile(to, &toFile, EnvOptions());
+
+    std::unique_ptr<SequentialFile> fromFile;
+    base_env_->NewSequentialFile(from, &fromFile, EnvOptions());
+
+    uint64_t file_size{0};
+    base_env_->GetFileSize(from, &file_size);
+
+    std::vector<char> scratch;
+    scratch.reserve(file_size);
+    Slice buffer;
+    fromFile->Read(5000, &buffer, scratch.data());
+    toFile->Append(buffer);
+
+    CopyObjectResult res;
+    return CopyObjectOutcome(res);
+  }
+
+  virtual Aws::S3::Model::GetObjectOutcome GetCloudObject(
+      const Aws::S3::Model::GetObjectRequest& request) override {
+    using namespace Aws::S3::Model;
+    auto from = getLocalPath(request.GetBucket(), request.GetKey());
+    auto parent_path = getParentPath(from);
+    createDirRecursively(parent_path);
+
+    GetObjectResult res;
+
+    uint64_t file_size = 0;
+    Status status = base_env_->GetFileSize(from, &file_size);
+    if (!status.ok()) {
+      Aws::Client::AWSError<Aws::S3::S3Errors> error(
+          Aws::S3::S3Errors::RESOURCE_NOT_FOUND, false);
+      return GetObjectOutcome(error);
+    }
+
+    res.SetContentLength(file_size);
+
+    std::unique_ptr<SequentialFile> fromFile;
+    base_env_->NewSequentialFile(from, &fromFile, EnvOptions());
+    std::vector<char> scratch;
+    scratch.reserve(file_size);
+    Slice buffer;
+    fromFile->Read(file_size, &buffer, scratch.data());
+
+    if (request.RangeHasBeenSet()) {
+      auto range = request.GetRange();
+      int start = 0;
+      int end = 0;
+      int matches = std::sscanf(range.c_str(), "bytes=%d-%d", &start, &end);
+      (void)matches;
+      assert(matches == 2);
+
+      buffer.remove_suffix(buffer.size() - end - 1);
+      buffer.remove_prefix(start);
+    }
+
+    const auto& responseStreamFactory = request.GetResponseStreamFactory();
+    std::unique_ptr<Aws::StringStream> ss(new Aws::StringStream());
+    if (responseStreamFactory) {
+      Aws::Utils::Stream::ResponseStream responseStream(responseStreamFactory);
+      responseStream.GetUnderlyingStream().write(buffer.data(), buffer.size());
+    }
+
+    (*ss) << buffer.ToString();
+    res.ReplaceBody(ss.release());
+
+    return GetObjectOutcome(std::move(res));
+  }
+
+  virtual std::shared_ptr<Aws::Transfer::TransferHandle> DownloadFile(
+      const Aws::String&, const Aws::String&, const Aws::String&) override {
+    return nullptr;
+  }
+
+  virtual Aws::S3::Model::PutObjectOutcome PutCloudObject(
+      const Aws::S3::Model::PutObjectRequest& request,
+      uint64_t /* size_hint */) override {
+    using namespace Aws::S3::Model;
+    Aws::StringStream ss;
+    auto stream = request.GetBody();
+    if (stream) {
+      ss << stream->rdbuf();
+    }
+    std::string buffer = ToStdString(ss.str());
+    {
+      auto to = getLocalPath(request.GetBucket(), request.GetKey());
+
+      auto parent_path = getParentPath(to);
+      createDirRecursively(parent_path);
+
+      std::unique_ptr<WritableFile> f;
+      base_env_->NewWritableFile(to, &f, EnvOptions());
+
+      if (!buffer.empty()) {
+        f->Append(buffer);
+      }
+
+      f->Sync();
+    }
+
+    if (request.MetadataHasBeenSet()) {
+      auto to = getMetadataLocalPath(request.GetBucket(), request.GetKey());
+      auto parent_path = getParentPath(to);
+      createDirRecursively(parent_path);
+
+      std::unique_ptr<WritableFile> f;
+      base_env_->NewWritableFile(to, &f, EnvOptions());
+
+      std::string metadata = buildMetadata(request.GetMetadata());
+      f->Append(metadata);
+    }
+
+    PutObjectResult res;
+    return PutObjectOutcome(res);
+  }
+
+  virtual std::shared_ptr<Aws::Transfer::TransferHandle> UploadFile(
+      const Aws::String&, const Aws::String&, const Aws::String&,
+      uint64_t) override {
+    return nullptr;
+  }
+
+  virtual Aws::S3::Model::HeadObjectOutcome HeadObject(
+      const Aws::S3::Model::HeadObjectRequest& request) override {
+    using namespace Aws::S3::Model;
+    auto path = getLocalPath(request.GetBucket(), request.GetKey());
+
+    if (!base_env_->FileExists(path).ok()) {
+      Aws::Client::AWSError<Aws::S3::S3Errors> error(
+          Aws::S3::S3Errors::RESOURCE_NOT_FOUND, false);
+      return HeadObjectOutcome(error);
+    }
+
+    uint64_t file_size;
+    uint64_t file_mtime;
+    base_env_->GetFileSize(path, &file_size);
+    base_env_->GetFileModificationTime(path, &file_mtime);
+
+    HeadObjectResult res;
+    res.SetContentLength(file_size);
+
+    Aws::Utils::DateTime lastModified((int64_t(file_mtime)));
+    res.SetLastModified(lastModified);
+    res.SetETag(ToAwsString(std::to_string(std::hash<std::string>{}(path))));
+
+    auto metadataPath =
+        getMetadataLocalPath(request.GetBucket(), request.GetKey());
+    if (base_env_->FileExists(metadataPath).ok()) {
+      std::ifstream metadataFile(metadataPath);
+      std::string line;
+      Aws::String key;
+      Aws::String value;
+      Aws::Map<Aws::String, Aws::String> meta;
+      int i = 0;
+      if (metadataFile.is_open()) {
+        while (getline(metadataFile, line)) {
+          if (i % 2 == 0) {
+            key = ToAwsString(line);
+          } else {
+            value = ToAwsString(line);
+            meta[key] = value;
+          }
+          i++;
+        }
+
+        res.SetMetadata(meta);
+      }
+    }
+
+    return HeadObjectOutcome(res);
+  }
+
+  bool HasTransferManager() const override {
+    // Don't support transfer manager for now.
+    return false;
+  }
+
+ private:
+  std::string getLocalPathStr(const std::string& bucket,
+                              const std::string& prefix) {
+    if (prefix.empty()) {
+      return root_dir_ + "/" + bucket;
+    }
+    return root_dir_ + "/" + bucket + "/" + prefix;
+  }
+
+  std::string getMetadataLocalPathStr(const std::string& bucket,
+                                      const std::string& prefix) {
+    return root_dir_ + "/.metadata/" + bucket + "/" + prefix;
+  }
+
+  std::string getLocalPath(const Aws::String& bucket,
+                           const Aws::String& prefix) {
+    return getLocalPathStr(ToStdString(bucket), ToStdString(prefix));
+  }
+
+  std::string getMetadataLocalPath(const Aws::String& bucket,
+                                   const Aws::String& prefix) {
+    return getMetadataLocalPathStr(ToStdString(bucket), ToStdString(prefix));
+  }
+
+  std::string buildMetadata(
+      const Aws::Map<Aws::String, Aws::String>& metadata) {
+    Aws::StringStream ss;
+    for (const auto& kv : metadata) {
+      ss << kv.first << std::endl << kv.second << std::endl;
+    }
+    return ToStdString(ss.str());
+  }
+
+  void destroyDir(const std::string& dir) {
+    std::string cmd = "rm -rf " + dir;
+    int rc = system(cmd.c_str());
+    (void)rc;
+  }
+
+  void createDirRecursively(const std::string& dir) {
+    std::string cmd = "mkdir -p " + dir;
+    int rc = system(cmd.c_str());
+    (void)rc;
+  }
+
+  std::string getParentPath(const std::string& path) {
+    auto parts = StringSplit(path, '/');
+    if (parts.empty()) {
+      return "";
+    }
+
+    std::string res = "/";
+    size_t num_parts = parts.size();
+    for (size_t i = 0; i < num_parts - 1; i++) {
+      if (parts[i].empty()) {
+        continue;
+      }
+      res += parts[i];
+      res += "/";
+    }
+
+    return res;
+  }
+
+  std::string root_dir_;
+  Env* base_env_;
+};
+}  // namespace test
 
 static bool IsNotFound(const Aws::S3::S3Errors& s3err) {
   return (s3err == Aws::S3::S3Errors::NO_SUCH_BUCKET ||
@@ -464,8 +858,13 @@ Status S3StorageProvider::Initialize(CloudEnv* env) {
     } else {
       Header(env->info_log_, "S3 connection to endpoint in region: %s",
              config.region.c_str());
-      s3client_ =
-          std::make_shared<AwsS3ClientWrapper>(creds, config, cloud_opts);
+      if (!cloud_opts.initialize_test_client) {
+        s3client_ =
+            std::make_shared<AwsS3ClientWrapperImpl>(creds, config, cloud_opts);
+      } else {
+        s3client_ =
+            std::make_shared<test::TestS3ClientWrapper>(env->GetBaseEnv());
+      }
     }
   }
   return status;
