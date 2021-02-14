@@ -4,26 +4,16 @@
 // A directory maps to an an zero-size object in an S3 bucket
 // A sst file maps to an object in that S3 bucket.
 //
+#ifdef USE_AWS
+#include <aws/core/Aws.h>
 #include <aws/core/utils/DateTime.h>
+#include <aws/core/utils/Outcome.h>
+#include <aws/core/utils/crypto/CryptoStream.h>
+#include <aws/core/utils/memory/stl/AWSStreamFwd.h>
 #include <aws/core/utils/memory/stl/AWSString.h>
 #include <aws/core/utils/memory/stl/AWSStringStream.h>
 #include <aws/core/utils/memory/stl/AWSVector.h>
 #include <aws/core/utils/stream/ResponseStream.h>
-
-#include <cstdio>
-#include <functional>
-#include <map>
-#include <memory>
-#include <sstream>
-#include <string>
-
-#include "env/io_posix.h"
-#include "test_util/testharness.h"
-#ifdef USE_AWS
-#include <aws/core/Aws.h>
-#include <aws/core/utils/Outcome.h>
-#include <aws/core/utils/crypto/CryptoStream.h>
-#include <aws/core/utils/memory/stl/AWSStreamFwd.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/S3Errors.h>
 #include <aws/s3/model/BucketLocationConstraint.h>
@@ -52,17 +42,25 @@
 
 #include <cassert>
 #include <cinttypes>
+#include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <string>
 
 #include "cloud/aws/aws_env.h"
 #include "cloud/aws/aws_file.h"
 #include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
+#include "env/io_posix.h"
 #include "port/port.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/options.h"
+#include "test_util/testharness.h"
 #include "util/stderr_logger.h"
 #include "util/string_util.h"
 

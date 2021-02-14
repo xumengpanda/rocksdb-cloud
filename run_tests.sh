@@ -50,15 +50,6 @@ echo "Running with $PARALLEL_JOBS parallel jobs"
 echo "Pulling base image..."
 docker pull rockset/rocksdb_cloud_runtime:test
 
-# echo "Checking AWS access keys"
-# if [[ -z ${AWS_ACCESS_KEY_ID+x} ]]; then
-#   AWS_ACCESS_KEY_ID=$(aws configure get aws_access_key_id) || die_error "AWS access key ID not found"
-# fi
-# if [[ -z ${AWS_SECRET_ACCESS_KEY+x} ]]; then
-#   AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key) || die_error "AWS secret access key not found"
-# fi
-# export AWS_ACCESS_KEY_ID
-# export AWS_SECRET_ACCESS_KEY
 export SRC_ROOT=$(git rev-parse --show-toplevel)
 
 echo "Building tests..."
