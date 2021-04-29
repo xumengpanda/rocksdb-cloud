@@ -125,7 +125,7 @@ class BucketOptions {
   void SetBucketName(const std::string& bucket, const std::string& prefix = "");
   const std::string& GetBucketName() const { return name_; }
   const std::string& GetObjectPath() const { return object_; }
-  void SetObjectPath(const std::string& object) { object_ = object; }
+  void SetObjectPath(const std::string& object);
   const std::string& GetRegion() const { return region_; }
   void SetRegion(const std::string& region) { region_ = region; }
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2017 Rockset.
 #ifndef ROCKSDB_LITE
 
-#ifndef _WIN32_WINNT
+#ifndef _WIN32
 #include <unistd.h>
 #else
 #include <windows.h>
@@ -12,6 +12,7 @@
 #include "cloud/cloud_env_wrapper.h"
 #include "cloud/db_cloud_impl.h"
 #include "cloud/filename.h"
+#include "file/filename.h"
 #include "port/likely.h"
 #include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/db.h"
@@ -59,6 +60,23 @@ void BucketOptions::SetBucketName(const std::string& bucket,
   }
 }
 
+void BucketOptions::SetObjectPath(const std::string& object) {
+  // Remove the drive if there is one...
+  auto colon = object.find(':');
+  if (colon != std::string::npos) {
+    object_ = object.substr(colon + 1);
+  } else {
+    object_ = object;
+  }
+  // Replace any "\" with "/"
+  for (auto pos = object_.find('\\'); pos != std::string::npos;
+       pos = object_.find('\\', pos)) {
+    object_[pos] = '/';
+  }
+  // Remove any duplicate markers
+  object_ = NormalizePath(object_);
+}
+
 // Initializes the bucket properties
 
 void BucketOptions::TEST_Initialize(const std::string& bucket,
@@ -70,15 +88,13 @@ void BucketOptions::TEST_Initialize(const std::string& bucket,
   if (!CloudEnvOptions::GetNameFromEnvironment("ROCKSDB_CLOUD_TEST_BUCKET_NAME",
                                                "ROCKSDB_CLOUD_BUCKET_NAME",
                                                &bucket_)) {
-#ifdef _WIN32_WINNT
+#ifdef _WIN32
     char user_name[257];  // UNLEN + 1
     DWORD dwsize = sizeof(user_name);
     if (!::GetUserName(user_name, &dwsize)) {
       bucket_ = bucket_ + "unknown";
     } else {
-      bucket_ =
-          bucket_ +
-          std::string(user_name, static_cast<std::string::size_type>(dwsize));
+      bucket_ = bucket_ + user_name;
     }
 #else
     bucket_ = bucket + std::to_string(geteuid());
@@ -90,10 +106,13 @@ void BucketOptions::TEST_Initialize(const std::string& bucket,
     prefix_ = prefix;
   }
   name_ = prefix_ + bucket_;
-  if (!CloudEnvOptions::GetNameFromEnvironment("ROCKSDB_CLOUD_TEST_OBECT_PATH",
-                                               "ROCKSDB_CLOUD_OBJECT_PATH",
-                                               &object_)) {
-    object_ = object;
+  std::string value;
+  if (CloudEnvOptions::GetNameFromEnvironment("ROCKSDB_CLOUD_TEST_OBECT_PATH",
+                                              "ROCKSDB_CLOUD_OBJECT_PATH",
+                                              &value)) {
+    SetObjectPath(value);
+  } else {
+    SetObjectPath(object);
   }
   if (!CloudEnvOptions::GetNameFromEnvironment(
           "ROCKSDB_CLOUD_TEST_REGION", "ROCKSDB_CLOUD_REGION", &region_)) {
