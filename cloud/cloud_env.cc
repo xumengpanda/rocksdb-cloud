@@ -60,21 +60,48 @@ void BucketOptions::SetBucketName(const std::string& bucket,
   }
 }
 
-void BucketOptions::SetObjectPath(const std::string& object) {
+static Status IsNormalizedPath(const std::string& path) {
+  auto pos = path.find_first_of("\\{}[]<>%~#|^\'\"");
+  if (pos != std::string::npos) {
+    return Status::InvalidArgument("Illegal character in object path:", path);
+  }
+  pos = path.find_first_of("&$@=;:+,?");
+  if (pos != std::string::npos) {
+    return Status::InvalidArgument("Special character in object path: ", path);
+  }
+  return Status::OK();
+}
+
+Status BucketOptions::NormalizeObjectPath(const std::string& path,
+                                          std::string* result) {
   // Remove the drive if there is one...
-  auto colon = object.find(':');
+  auto colon = path.find(':');
+  std::string normalized;
   if (colon != std::string::npos) {
-    object_ = object.substr(colon + 1);
+    normalized = path.substr(colon + 1);
   } else {
-    object_ = object;
+    normalized = path;
   }
   // Replace any "\" with "/"
-  for (auto pos = object_.find('\\'); pos != std::string::npos;
-       pos = object_.find('\\', pos)) {
-    object_[pos] = '/';
+  for (auto pos = normalized.find('\\'); pos != std::string::npos;
+       pos = normalized.find('\\', pos)) {
+    normalized[pos] = '/';
   }
   // Remove any duplicate markers
-  object_ = NormalizePath(object_);
+  normalized = NormalizePath(normalized);
+  Status s = IsNormalizedPath(normalized);
+  if (s.ok()) {
+    *result = normalized;
+  }
+  return s;
+}
+
+Status BucketOptions::SetObjectPath(const std::string& object) {
+  Status s = IsNormalizedPath(object);
+  if (s.ok()) {
+    object_ = object;
+  }
+  return s;
 }
 
 // Initializes the bucket properties
@@ -110,10 +137,12 @@ void BucketOptions::TEST_Initialize(const std::string& bucket,
   if (CloudEnvOptions::GetNameFromEnvironment("ROCKSDB_CLOUD_TEST_OBECT_PATH",
                                               "ROCKSDB_CLOUD_OBJECT_PATH",
                                               &value)) {
-    SetObjectPath(value);
+    NormalizeObjectPath(value, &value);
   } else {
-    SetObjectPath(object);
+    NormalizeObjectPath(object, &value);
   }
+  SetObjectPath(value);
+
   if (!CloudEnvOptions::GetNameFromEnvironment(
           "ROCKSDB_CLOUD_TEST_REGION", "ROCKSDB_CLOUD_REGION", &region_)) {
     region_ = region;
@@ -136,15 +165,24 @@ Status CloudEnv::NewAwsEnv(
     const std::string& dest_cloud_region, const CloudEnvOptions& cloud_options,
     const std::shared_ptr<Logger>& logger, CloudEnv** cenv) {
   CloudEnvOptions options = cloud_options;
+  Status s;
   if (!src_cloud_bucket.empty())
     options.src_bucket.SetBucketName(src_cloud_bucket);
-  if (!src_cloud_object.empty())
-    options.src_bucket.SetObjectPath(src_cloud_object);
+  if (!src_cloud_object.empty()) {
+    s = options.src_bucket.SetObjectPath(src_cloud_object);
+    if (!s.ok()) {
+      return s;
+    }
+  }
   if (!src_cloud_region.empty()) options.src_bucket.SetRegion(src_cloud_region);
-  if (!dest_cloud_bucket.empty())
+  if (!dest_cloud_bucket.empty()) 
     options.dest_bucket.SetBucketName(dest_cloud_bucket);
-  if (!dest_cloud_object.empty())
-    options.dest_bucket.SetObjectPath(dest_cloud_object);
+  if (!dest_cloud_object.empty()) {
+    s = options.dest_bucket.SetObjectPath(dest_cloud_object);
+    if (!s.ok()) {
+      return s;
+    }
+  }
   if (!dest_cloud_region.empty())
     options.dest_bucket.SetRegion(dest_cloud_region);
   return NewAwsEnv(base_env, options, logger, cenv);
