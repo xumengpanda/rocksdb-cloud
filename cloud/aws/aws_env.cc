@@ -170,6 +170,12 @@ AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options,
                const std::shared_ptr<Logger>& info_log)
     : CloudEnvImpl(_cloud_env_options, underlying_env, info_log) {
   Aws::InitAPI(Aws::SDKOptions());
+}
+
+// If you do not specify a region, then S3 buckets are created in the
+// standard-region which might not satisfy read-your-own-writes. So,
+// explicitly make the default region be us-west-2.
+Status AwsEnv::PrepareOptions(const ConfigOptions& options) {
   if (cloud_env_options.src_bucket.GetRegion().empty() ||
       cloud_env_options.dest_bucket.GetRegion().empty()) {
     std::string region;
@@ -184,7 +190,15 @@ AwsEnv::AwsEnv(Env* underlying_env, const CloudEnvOptions& _cloud_env_options,
       cloud_env_options.dest_bucket.SetRegion(region);
     }
   }
-  base_env_ = underlying_env;
+  // If there is not a storage provider
+  if (cloud_env_options.storage_provider == nullptr) {
+    Status s = CloudStorageProvider::CreateFromString(options, CloudStorageProvider::kAws(),
+                                                      &cloud_env_options.storage_provider);
+    if (!s.ok()) {
+      return s;
+    }
+  }
+  return CloudEnvImpl::PrepareOptions(options);
 }
 
 void AwsEnv::Shutdown() { Aws::ShutdownAPI(Aws::SDKOptions()); }
@@ -200,39 +214,26 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
   if (!base_env) {
     base_env = Env::Default();
   }
-  // These lines of code are likely temporary until the new configuration stuff
-  // comes into play.
-  CloudEnvOptions options = cloud_options;  // Make a copy
-  status =
-      CloudStorageProviderImpl::CreateS3Provider(&options.storage_provider);
-  if (status.ok() && !cloud_options.keep_local_log_files) {
-    if (cloud_options.log_type == kLogKinesis) {
-      status = CloudLogControllerImpl::CreateKinesisController(
-          &options.cloud_log_controller);
-    } else if (cloud_options.log_type == kLogKafka) {
-      status = CloudLogControllerImpl::CreateKafkaController(
-          &options.cloud_log_controller);
-    } else {
-      status =
-          Status::NotSupported("We currently only support Kinesis and Kafka");
-      Log(InfoLogLevel::ERROR_LEVEL, info_log,
-          "[aws] NewAwsEnv Unknown log type %d. %s", cloud_options.log_type,
-          status.ToString().c_str());
-    }
-  }
-  if (!status.ok()) {
-    Log(InfoLogLevel::ERROR_LEVEL, info_log,
-        "[aws] NewAwsEnv Unable to create environment %s",
-        status.ToString().c_str());
-    return status;
-  }
-  std::unique_ptr<AwsEnv> aenv(new AwsEnv(base_env, options, info_log));
-  status = aenv->Prepare();
+  std::unique_ptr<AwsEnv> aenv(new AwsEnv(base_env, cloud_options, info_log));
+  ConfigOptions config_options;
+  config_options.env = aenv.get();
+  status = aenv->PrepareOptions(config_options);
   if (status.ok()) {
     *cenv = aenv.release();
   }
   return status;
 }
 #endif  // USE_AWS
+
+Status AwsEnv::NewAwsEnv(Env* env, std::unique_ptr<CloudEnv>* cenv) {
+#ifdef USE_AWS
+  cenv->reset(new AwsEnv(env, CloudEnvOptions()));
+  return Status::OK();
+#else
+  (void) env;
+  cenv->reset();
+  return Status::NotSupported("AWS not supported");
+#endif // USE_AWS
+}
 }  // namespace ROCKSDB_NAMESPACE
 #endif // ROCKSDB_LITE
