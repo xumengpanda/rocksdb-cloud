@@ -190,8 +190,9 @@ Status AwsEnv::PrepareOptions(const ConfigOptions& options) {
       cloud_env_options.dest_bucket.SetRegion(region);
     }
   }
-  // If there is not a storage provider
   if (cloud_env_options.storage_provider == nullptr) {
+    // If the user has not specified a storage provider, then use the default
+    // provider for this CloudType
     Status s = CloudStorageProvider::CreateFromString(options, CloudStorageProvider::kAws(),
                                                       &cloud_env_options.storage_provider);
     if (!s.ok()) {
@@ -214,10 +215,6 @@ Status AwsEnv::NewAwsEnv(Env* base_env, const CloudEnvOptions& cloud_options,
   if (!base_env) {
     base_env = Env::Default();
   }
-  std::unique_ptr<AwsEnv> aenv(new AwsEnv(base_env, cloud_options, info_log));
-  ConfigOptions config_options;
-  config_options.env = aenv.get();
-  status = aenv->PrepareOptions(config_options);
   if (status.ok()) {
     *cenv = aenv.release();
   }
