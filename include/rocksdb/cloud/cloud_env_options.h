@@ -56,6 +56,7 @@ enum class AwsAccessType {
 // Credentials needed to access AWS cloud service
 class AwsCloudAccessCredentials {
  public:
+  AwsCloudAccessCredentials();
   // functions to support AWS credentials
   //
   // Initialize AWS credentials using access_key_id and secret_key
@@ -63,8 +64,6 @@ class AwsCloudAccessCredentials {
                         const std::string& aws_secret_key);
   // Initialize AWS credentials using a config file
   void InitializeConfig(const std::string& aws_config_file);
-  // Initialize credentials for tests (relies on config vars)
-  Status TEST_Initialize();
 
   // test if valid AWS credentials are present
   Status HasValid() const;

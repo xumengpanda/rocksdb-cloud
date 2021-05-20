@@ -1,11 +1,14 @@
 // Copyright (c) 2017 Rockset
 
-#include "rocksdb/convenience.h"
+#include "cloud/cloud_log_controller_impl.h"
+#include "cloud/cloud_storage_provider_impl.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/cloud/cloud_log_controller.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
+#include "rocksdb/convenience.h"
 #include "rocksdb/env.h"
 #include "test_util/testharness.h"
+#include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
 class CloudEnvTest : public testing::Test {
@@ -119,7 +122,46 @@ TEST_F(CloudEnvTest, ConfigureEnv) {
   ASSERT_NE(copts, nullptr);
   ASSERT_TRUE(copts->keep_local_sst_files);
 }
-  
+
+TEST_F(CloudEnvTest, TestInitialize) {
+  std::unique_ptr<CloudEnv> cenv;
+  BucketOptions bucket;
+  ConfigOptions config_options;
+  config_options.invoke_prepare_options = false;
+  ASSERT_OK(CloudEnv::CreateFromString(
+      config_options, "id=cloud; TEST=cloudenvtest:/test/path", &cenv));
+  ASSERT_NE(cenv, nullptr);
+  ASSERT_STREQ(cenv->Name(), "cloud");
+
+  ASSERT_TRUE(StartsWith(cenv->GetSrcBucketName(),
+                         bucket.GetBucketPrefix() + "cloudenvtest."));
+  ASSERT_EQ(cenv->GetSrcObjectPath(), "/test/path");
+  ASSERT_TRUE(cenv->SrcMatchesDest());
+
+  ASSERT_OK(CloudEnv::CreateFromString(
+      config_options, "id=cloud; TEST=cloudenvtest2:/test/path2?here", &cenv));
+  ASSERT_NE(cenv, nullptr);
+  ASSERT_STREQ(cenv->Name(), "cloud");
+  ASSERT_TRUE(StartsWith(cenv->GetSrcBucketName(),
+                         bucket.GetBucketPrefix() + "cloudenvtest2."));
+  ASSERT_EQ(cenv->GetSrcObjectPath(), "/test/path2");
+  ASSERT_EQ(cenv->GetCloudEnvOptions().src_bucket.GetRegion(), "here");
+  ASSERT_TRUE(cenv->SrcMatchesDest());
+
+  ASSERT_OK(
+      CloudEnv::CreateFromString(config_options,
+                                 "id=cloud; TEST=cloudenvtest3:/test/path3; "
+                                 "src.bucket=my_bucket; dest.object=/my_path",
+                                 &cenv));
+  ASSERT_NE(cenv, nullptr);
+  ASSERT_STREQ(cenv->Name(), "cloud");
+  ASSERT_EQ(cenv->GetSrcBucketName(), bucket.GetBucketPrefix() + "my_bucket");
+  ASSERT_EQ(cenv->GetSrcObjectPath(), "/test/path3");
+  ASSERT_TRUE(StartsWith(cenv->GetDestBucketName(),
+                         bucket.GetBucketPrefix() + "cloudenvtest3."));
+  ASSERT_EQ(cenv->GetDestObjectPath(), "/my_path");
+}
+
 TEST_F(CloudEnvTest, ConfigureAwsEnv) {
   std::unique_ptr<CloudEnv> cenv;
   
@@ -133,7 +175,8 @@ TEST_F(CloudEnvTest, ConfigureAwsEnv) {
   ASSERT_NE(copts, nullptr);
   ASSERT_TRUE(copts->keep_local_sst_files);
   ASSERT_NE(cenv->GetStorageProvider(), nullptr);
-  ASSERT_STREQ(cenv->GetStorageProvider()->Name(), CloudStorageProvider::kAws());
+  ASSERT_STREQ(cenv->GetStorageProvider()->Name(),
+               CloudStorageProviderImpl::kS3());
 #else
   ASSERT_NOK(s);
   ASSERT_EQ(cenv, nullptr);
@@ -152,11 +195,14 @@ TEST_F(CloudEnvTest, ConfigureS3Provider) {
   ASSERT_OK(CloudEnv::CreateFromString(config_options, "id=aws; provider=s3", &cenv));
   ASSERT_STREQ(cenv->Name(), "aws");
   ASSERT_NE(cenv->GetStorageProvider(), nullptr);
-  ASSERT_STREQ(cenv->GetStorageProvider()->Name(), CloudStorageProvider::kAws());
+  ASSERT_STREQ(cenv->GetStorageProvider()->Name(),
+               CloudStorageProviderImpl::kS3());
 #endif
 }
-  
-TEST_F(CloudEnvTest, ConfigureKinesisController) {
+
+// Test is disabled until we have a mock provider and authentication issues are
+// resolved
+TEST_F(CloudEnvTest, DISABLED_ConfigureKinesisController) {
   std::unique_ptr<CloudEnv> cenv;
   
   ConfigOptions config_options;
@@ -165,13 +211,15 @@ TEST_F(CloudEnvTest, ConfigureKinesisController) {
   ASSERT_EQ(cenv, nullptr);
   
 #ifdef USE_AWS
-  ASSERT_OK(CloudEnv::CreateFromString(config_options, "id=aws; controller=kinesis", &cenv));
+  ASSERT_OK(CloudEnv::CreateFromString(
+      config_options, "id=aws; controller=kinesis; TEST=dbcloud:/test", &cenv));
   ASSERT_STREQ(cenv->Name(), "aws");
   ASSERT_NE(cenv->GetLogController(), nullptr);
-  ASSERT_STREQ(cenv->GetLogController()->Name(), CloudLogController::kKinesis());
+  ASSERT_STREQ(cenv->GetLogController()->Name(),
+               CloudLogControllerImpl::kKinesis());
 #endif
 }
-  
+
 TEST_F(CloudEnvTest, ConfigureKafkaController) {
   std::unique_ptr<CloudEnv> cenv;
   
@@ -181,7 +229,8 @@ TEST_F(CloudEnvTest, ConfigureKafkaController) {
   ASSERT_OK(s);
   ASSERT_NE(cenv, nullptr);
   ASSERT_NE(cenv->GetLogController(), nullptr);
-  ASSERT_STREQ(cenv->GetLogController()->Name(), CloudLogController::kKafka());
+  ASSERT_STREQ(cenv->GetLogController()->Name(),
+               CloudLogControllerImpl::kKafka());
 #else
   ASSERT_NOK(s);
   ASSERT_EQ(cenv, nullptr);

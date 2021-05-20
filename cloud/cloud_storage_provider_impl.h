@@ -100,6 +100,7 @@ class CloudStorageWritableFileImpl : public CloudStorageWritableFile {
 class CloudStorageProviderImpl : public CloudStorageProvider {
  public:
   static Status CreateS3Provider(std::unique_ptr<CloudStorageProvider>* result);
+  static const char* kS3() { return "s3"; }
 
   CloudStorageProviderImpl();
   virtual ~CloudStorageProviderImpl();

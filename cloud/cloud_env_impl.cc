@@ -1932,11 +1932,11 @@ Status CloudEnvImpl::PrepareOptions(const ConfigOptions& options) {
       !cloud_env_options.keep_local_log_files) {
     if (cloud_env_options.log_type == LogType::kLogKinesis) {
       status = CloudLogController::CreateFromString(
-          options, CloudLogController::kKinesis(),
+          options, CloudLogControllerImpl::kKinesis(),
           &cloud_env_options.cloud_log_controller);
     } else if (cloud_env_options.log_type == LogType::kLogKafka) {
       status = CloudLogController::CreateFromString(
-          options, CloudLogController::kKafka(),
+          options, CloudLogControllerImpl::kKafka(),
           &cloud_env_options.cloud_log_controller);
     } else {
       status = Status::NotSupported("Unsupported log controller type");

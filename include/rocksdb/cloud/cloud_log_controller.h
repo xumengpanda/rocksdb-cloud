@@ -57,8 +57,6 @@ class CloudLogController : public Configurable {
   static Status CreateFromString(
       const ConfigOptions& config_options, const std::string& id,
       std::shared_ptr<CloudLogController>* controller);
-  static const char* kKafka() { return "kafka"; }
-  static const char* kKinesis() { return "kinesis"; }
 
   // Returns name of the cloud log type (Kinesis, etc.).
   virtual const char* Name() const = 0;

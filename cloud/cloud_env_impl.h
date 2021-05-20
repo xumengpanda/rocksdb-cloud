@@ -14,6 +14,7 @@
 namespace ROCKSDB_NAMESPACE {
 class CloudScheduler;
 class CloudStorageReadableFile;
+class ObjectLibrary;
 
 //
 // The Cloud environment
@@ -22,6 +23,7 @@ class CloudEnvImpl : public CloudEnv {
   friend class CloudEnv;
 
  public:
+  static int RegisterAwsObjects(ObjectLibrary& library, const std::string& arg);
   // Constructor
   CloudEnvImpl(const CloudEnvOptions& options, Env* base_env,
                const std::shared_ptr<Logger>& logger);

@@ -13,6 +13,9 @@ class CloudEnvOptions;
 
 class CloudLogControllerImpl : public CloudLogController {
  public:
+  static const char* kKafka() { return "kafka"; }
+  static const char* kKinesis() { return "kinesis"; }
+
   static constexpr const char* kCacheDir = "/tmp/ROCKSET";
   // Delay in Cloud Log stream: writes to read visibility
   static const std::chrono::microseconds kRetryPeriod;

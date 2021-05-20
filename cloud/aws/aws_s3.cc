@@ -358,7 +358,7 @@ class S3WritableFile : public CloudStorageWritableFileImpl {
       : CloudStorageWritableFileImpl(env, local_fname, bucket, cloud_fname,
                                      options) {}
   virtual const char* Name() const override {
-    return CloudStorageProvider::kAws();
+    return CloudStorageProviderImpl::kS3();
   }
 };
 
@@ -366,7 +366,7 @@ class S3WritableFile : public CloudStorageWritableFileImpl {
 class S3StorageProvider : public CloudStorageProviderImpl {
  public:
   ~S3StorageProvider() override {}
-  virtual const char* Name() const override { return kAws(); }
+  virtual const char* Name() const override { return kS3(); }
   Status CreateBucket(const std::string& bucket) override;
   Status ExistsBucket(const std::string& bucket) override;
   Status EmptyBucket(const std::string& bucket_name,
@@ -439,9 +439,9 @@ class S3StorageProvider : public CloudStorageProviderImpl {
 Status S3StorageProvider::PrepareOptions(const ConfigOptions& options) {
   auto cenv = static_cast<CloudEnv*>(options.env);
   const CloudEnvOptions& cloud_opts = cenv->GetCloudEnvOptions();
-  if (std::string(cenv->Name()) != CloudEnv::kAws()) {
+  if (std::string(cenv->Name()) != CloudEnvImpl::kAws()) {
     return Status::InvalidArgument("S3 Provider requires AWS Environment");
-  }    
+  }
   // TODO: support buckets being in different regions
   if (!cenv->SrcMatchesDest() && cenv->HasSrcBucket() &&
       cenv->HasDestBucket()) {
