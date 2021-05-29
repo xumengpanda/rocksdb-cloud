@@ -390,7 +390,7 @@ int DoRegisterCloudObjects(ObjectLibrary& library, const std::string& arg) {
   int count = 0;
   // Register the Env types
   library.Register<Env>(
-        CloudEnv::kName(),
+        CloudEnvImpl::kClassName(),
         [](const std::string& /*uri*/, std::unique_ptr<Env>* guard,
            std::string* /*errmsg*/) {
           guard->reset(new CloudEnvImpl(CloudEnvOptions(), Env::Default(), nullptr));
@@ -442,7 +442,7 @@ Status CloudEnv::CreateFromString(const ConfigOptions& config_options, const std
         id = iter->second;
         options.erase(iter);
       } else {
-        id = CloudEnv::kName();
+        id = CloudEnvImpl::kClassName();
       }
     }
   }
@@ -492,7 +492,7 @@ Status CloudEnv::CreateFromString(const ConfigOptions& config_options, const std
         id = iter->second;
         options.erase(iter);
       } else {
-        id = CloudEnv::kName();
+        id = CloudEnvImpl::kClassName();
       }
     }
   }

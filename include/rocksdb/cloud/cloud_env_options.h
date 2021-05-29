@@ -179,7 +179,7 @@ class CloudEnvOptions {
   static const char* kName() { return "CloudEnvOptions"; }
   BucketOptions src_bucket;
   BucketOptions dest_bucket;
-  // Specify the type of cloud-service to use.
+  // Specify the type of cloud-service to use. Deprecated.
   CloudType cloud_type;
 
   // If keep_local_log_files is false, this specifies what service to use
@@ -189,8 +189,7 @@ class CloudEnvOptions {
 
   // Specifies the class responsible for accessing objects in the cloud.
   // A null value indicates that the default storage provider based on
-  // the cloud type be used. For example, if cloud_type is kCloudAws, then
-  // the S3 storage provider would be used by default.
+  // the cloud env be used. 
   // Default:  null
   std::shared_ptr<CloudStorageProvider> storage_provider;
 
@@ -330,8 +329,7 @@ class CloudEnvOptions {
       int _number_objects_listed_in_one_iteration = 5000,
       int _constant_sst_file_size_in_sst_file_manager = -1,
       bool _skip_cloud_files_in_getchildren = false)
-      : cloud_type(_cloud_type),
-        log_type(_log_type),
+      : log_type(_log_type),
         keep_local_sst_files(_keep_local_sst_files),
         keep_local_log_files(_keep_local_log_files),
         purger_periodicity_millis(_purger_periodicity_millis),
@@ -349,7 +347,9 @@ class CloudEnvOptions {
             _number_objects_listed_in_one_iteration),
         constant_sst_file_size_in_sst_file_manager(
             _constant_sst_file_size_in_sst_file_manager),
-        skip_cloud_files_in_getchildren(_skip_cloud_files_in_getchildren) {}
+        skip_cloud_files_in_getchildren(_skip_cloud_files_in_getchildren) {
+    (void) _cloud_type;
+  }
 
   // print out all options to the log
   void Dump(Logger* log) const;
@@ -395,10 +395,9 @@ class CloudEnv : public Env, public Configurable {
   static Status CreateFromString(const ConfigOptions& config_options, const std::string& id,
                                  const CloudEnvOptions& cloud_options,
                                  std::unique_ptr<CloudEnv>* env);
-  virtual const char* Name() const { return kName(); }
-  static const char* kName() { return "cloud"; }
+  static const char* kCloud() { return "cloud"; }
   static const char* kAws() { return "aws"; }
-  
+  virtual const char* Name() const { return "cloud-env"; }
   // Returns the underlying env
   Env* GetBaseEnv() { return base_env_; }
   virtual Status PreloadCloudManifest(const std::string& local_dbname) = 0;

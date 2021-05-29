@@ -29,10 +29,9 @@ class CloudEnvImpl : public CloudEnv {
                const std::shared_ptr<Logger>& logger);
   
   virtual ~CloudEnvImpl();
-  static const char *kName() { return "cloud-impl"; }
+  static const char *kClassName() { return kCloud(); }
+  virtual const char* Name() const override { return kClassName(); }
   
-  const CloudType& GetCloudType() const { return cloud_env_options.cloud_type; }
-
   Status NewSequentialFile(const std::string& fname,
                            std::unique_ptr<SequentialFile>* result,
                            const EnvOptions& options) override;
